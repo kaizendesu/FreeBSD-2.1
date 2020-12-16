@@ -17,9 +17,10 @@
 This section lists the relevant functions for the walkthrough by filename,
 where each function per filename is listed in the order that it is called.
 
-The first '+' means that I have read the code or have a general idea of what it does.
-The second '+' means that I have read the code closely and heavily commented it.
-The third '+' means that I have added it to this document's code walkthrough.
+* The first '+' means that I have read the code or have a general idea of what it does.
+* The second '+' means that I have read the code closely and heavily commented it.
+* The third '+' means that I have read through the doe again with a focus on the bigger picture.
+* The fourth '+' means that I have added it to this document's code walkthrough.
 
 ```txt
 ```
