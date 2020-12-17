@@ -635,9 +635,9 @@ vm_mmap(map, addr, size, prot, maxprot, flags, handle, foff)
 		if (*addr != trunc_page(*addr))
 			return (EINVAL);
 		fitit = FALSE;
+		/* We call this on the proc's vm map */
 		(void) vm_map_remove(map, *addr, *addr + size);
 	}
-
 	/*
 	 * Lookup/allocate pager.  All except an unnamed anonymous lookup gain
 	 * a reference to ensure continued existance of the object. (XXX the
