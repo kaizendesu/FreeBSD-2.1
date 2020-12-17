@@ -265,6 +265,7 @@ pmap_pte_vm_page(pmap, pt)
 {
 	vm_page_t m;
 
+	/* i386_trunc_page(x) ((unsigned)(x) & ~(NBPG-1)) */
 	pt = i386_trunc_page(pt);
 	pt = (pt - UPT_MIN_ADDRESS) / NBPG;
 	pt = ((vm_offset_t) pmap->pm_pdir[pt]) & PG_FRAME;
@@ -1396,17 +1397,39 @@ pmap_enter_quick(pmap, va, pa)
 	int s;
 
 	/*
-	 * Enter on the PV list if part of our managed memory Note that we
+	 * Enter on the PV list if part of our managed memory. Note that we
 	 * raise IPL while manipulating pv_table since pmap_enter can be
 	 * called at interrupt time.
+	 *
+	 *                Virtual Address Format
+	 * | Page Directory Offset | Page Table Offset |  Page Offset   |
+	 * |     Bits 22 - 31      |   Bits 12 - 21    |  Bits 0 - 11   |
+	 * |     0000 0000 00      |   0000 0000 00    | 0000 0000 0000 |
+	 *
+	 * #define PGSHIFT      12
+	 * #define i386_btop(x) ((unsigned)(x) >> PGSHIFT)
+	 * #define vtopte(va)   (PTmap + i386_btop(va))
+	 *
+	 * Hence, we use the pg dir and pg tbl idxs as a composite pte idx
+	 * and add it to PTmap to obtain the pa of the page table
+	 * corresponding to va.
 	 */
-
 	pte = vtopte(va);
 
-	/* a fault on the page table might occur here */
+	/* a fault on the page table might occur here
+	 *
+	 * In other words, dereferencing the ptr to the pg table page
+	 * can cause a page fault.
+	 */
 	if (*pte) {
+		/* Remove the proc's old mapping at va */
 		pmap_remove(pmap, va, va + PAGE_SIZE);
 	}
+	/*
+	 * #define atop(x)       ((unsigned)(x) >> PG_SHIFT)
+	 * #define pa_index(pa)  atop(pa - vm_first_phys)
+	 * #define pa_to_pvh(pa) (&pv_table[pa_index(pa)])
+	 */
 	pv = pa_to_pvh(pa);
 	s = splhigh();
 	/*
@@ -1422,9 +1445,12 @@ pmap_enter_quick(pmap, va, pa)
 	 * after the header.
 	 */
 	else {
+		/* Returns a new pv entry */
 		npv = get_pv_entry();
+		/* Initialize pv entry with new mapping's data */
 		npv->pv_va = va;
 		npv->pv_pmap = pmap;
+		/* Insert new pv entry */
 		npv->pv_next = pv->pv_next;
 		pv->pv_next = npv;
 	}
@@ -1434,9 +1460,10 @@ pmap_enter_quick(pmap, va, pa)
 	 * Increment counters
 	 */
 	pmap->pm_stats.resident_count++;
-
 	/*
 	 * Now validate mapping with desired protection/wiring.
+	 *
+	 * Recall that pte is an entry pointing to a page tbl page.
 	 */
 	*pte = (pt_entry_t) ((int) (pa | PG_V | PG_u));
 
@@ -1464,21 +1491,33 @@ pmap_object_init_pt(pmap, addr, object, offset, size)
 	int bits;
 	int objbytes;
 
+	/*
+	 * If the pmap doesn't exist or the size of the object > 2MiB
+	 * and the resident page count > 512, we return.
+	 */
 	if (!pmap || ((size > MAX_INIT_PT) &&
 		(object->resident_page_count > (MAX_INIT_PT / NBPG)))) {
 		return;
 	}
+
+	/* Attempt to lock the object and return if we fail. */
 	if (!vm_object_lock_try(object))
 		return;
-
+	/*
+	 * Prefault as many pages as we are able if the size
+	 * plus offset is larger than the object.
+	 */
 	if ((size + offset) > object->size)
 		size = object->size - offset;
-
 	/*
 	 * if we are processing a major portion of the object, then scan the
 	 * entire thing.
+	 *
+	 * In other words, if we are processing more than 25% of the object,
+	 * we must scan the entire object.
 	 */
 	if (size > (object->size >> 2)) {
+		/* Nb of bytes to map */
 		objbytes = size;
 
 		for (p = object->memq.tqh_first;
@@ -1486,23 +1525,40 @@ pmap_object_init_pt(pmap, addr, object, offset, size)
 		    p = p->listq.tqe_next) {
 
 			tmpoff = p->offset;
+			/*
+			 * If the cur pg's offset < the offset of mapping
+			 * we are prefaulting in, continue to the next pg.
+			 */
 			if (tmpoff < offset) {
 				continue;
 			}
 			tmpoff -= offset;
+			/*
+			 * If the cur page's offset > the max offset of the
+			 * mapping we are prefaulting in, continue to next pg.
+			 */
 			if (tmpoff >= size) {
 				continue;
-			}
+			}	/* Page is on the active/inactive list */
 			if (((p->flags & (PG_ACTIVE | PG_INACTIVE)) != 0) &&
+				/* Every disk blk of the page is valid */
 			    ((p->valid & VM_PAGE_BITS_ALL) == VM_PAGE_BITS_ALL) &&
+				/* Page has no buffers mapped */
 			    (p->bmapped == 0) &&
+				/* Page is not busy */
 				(p->busy == 0) &&
+				/* The page is not busy, cached, or fictitious */
 			    (p->flags & (PG_BUSY | PG_FICTITIOUS | PG_CACHE)) == 0) {
+				/*
+				 * Mark the page as busy, map it into the proc's va space,
+				 * mark the page as mapped, and then unlock it.
+				 */
 				p->flags |= PG_BUSY;
 				pmap_enter_quick(pmap, addr + tmpoff, VM_PAGE_TO_PHYS(p));
 				p->flags |= PG_MAPPED;
 				PAGE_WAKEUP(p);
 			}
+			/* Decrement nb of bytes to map */
 			objbytes -= NBPG;
 		}
 	} else {
@@ -1510,11 +1566,24 @@ pmap_object_init_pt(pmap, addr, object, offset, size)
 		 * else lookup the pages one-by-one.
 		 */
 		for (tmpoff = 0; tmpoff < size; tmpoff += NBPG) {
+			/*
+			 * Looks up the pg in the vm_page hash table using
+			 * the object/(tmpoff+offset) pair. Returns NULL
+			 * if isn't found.
+			 */
 			p = vm_page_lookup(object, tmpoff + offset);
+			/* Page is on the active/inactive list */
 			if (p && ((p->flags & (PG_ACTIVE | PG_INACTIVE)) != 0) &&
+				/* The pg is not busy and has no buffers mapped */
 			    (p->bmapped == 0) && (p->busy == 0) &&
+				/* Every disk blk of the page is valid */
 			    ((p->valid & VM_PAGE_BITS_ALL) == VM_PAGE_BITS_ALL) &&
+				/* The page is not busy, cached, or fictitious */
 			    (p->flags & (PG_BUSY | PG_FICTITIOUS | PG_CACHE)) == 0) {
+				/*
+				 * Mark the page as busy, map it into the proc's va space,
+				 * mark the page as mapped, and then unlock it.
+				 */
 				p->flags |= PG_BUSY;
 				pmap_enter_quick(pmap, addr + tmpoff, VM_PAGE_TO_PHYS(p));
 				p->flags |= PG_MAPPED;

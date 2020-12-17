@@ -31,9 +31,12 @@ mmap
 				vm_map_entry_link
 		vm_object_pmap_copy
 		pmap_object_init_pt
+			vm_page_lookup
 			pmap_enter_quick
 				pmap_remove
+				get_pv_entry
 				pmap_use_pt
+					pmap_pte_vm_page
 		vm_map_protect
 			pmap_protect
 		vm_map_inherit
@@ -72,24 +75,29 @@ File: vm_object.c
 	vm_object_remove		----
 	vm_object_terminate		----
 	_vm_object_page_clean	----
-	vm_object_pmap_copy		----
+	vm_object_pmap_copy		++--
 
 File: vm_map.c
 	vm_map_find				++--
 	vm_map_findspace		++--
 	vm_map_lookup_entry		++--
-	vm_map_insert			+---
+	vm_map_insert			++--
 	vm_map_entry_create		+---
-	vm_map_entry_link		+---
+	vm_map_entry_link		++--
 	vm_map_protect			----
 	vm_map_inherit			----
 
 File: pmap.c
-	pmap_object_init_pt		----
-	pmap_enter_quick		----
+	pmap_object_init_pt		++--
+	pmap_enter_quick		++--
 	pmap_remove				----
-	pmap_use_pt				----
+	get_pv_entry			++--
+	pmap_use_pt				++--
+	pmap_pte_vm_page		++--
 	pmap_protect			----
+
+File: vm_page.c
+	vm_page_lookup			++--
 ```
 
 ## Important Data Structures
@@ -279,6 +287,89 @@ struct vnpager {
 typedef struct vnpager *vn_pager_t;
 ```
 
+### *vm\_object* Structures
+
+```c
+/* From /sys/vm/vm_object.h */
+
+struct vm_object {
+	struct pglist memq;		/* Resident memory */
+	TAILQ_HEAD(rslist, vm_object) reverse_shadow_head; /* objects that this is a shadow for */
+	TAILQ_ENTRY(vm_object) object_list; /* list of all objects */
+	TAILQ_ENTRY(vm_object) reverse_shadow_list; /* chain of objects that are shadowed */
+	TAILQ_ENTRY(vm_object) cached_list; /* for persistence */
+	vm_size_t size;			/* Object size */
+	int ref_count;			/* How many refs?? */
+	u_short flags;			/* see below */
+	u_short paging_in_progress;	/* Paging (in or out) so don't collapse or destroy */
+	int resident_page_count;	/* number of resident pages */
+	vm_pager_t pager;		/* Where to get data */
+	vm_offset_t paging_offset;	/* Offset into paging space */
+	struct vm_object *shadow;	/* My shadow */
+	vm_offset_t shadow_offset;	/* Offset in shadow */
+	struct vm_object *copy;		/* Object that holds copies of my changed pages */
+	vm_offset_t last_read;		/* last read in object -- detect seq behavior */
+};
+```
+
+### *vm\_page* Structure
+
+```c
+/* From /sys/vm/vm_page.h */
+
+struct vm_page {
+	TAILQ_ENTRY(vm_page) pageq;	/* queue info for FIFO queue or free list (P) */
+	TAILQ_ENTRY(vm_page) hashq;	/* hash table links (O) */
+	TAILQ_ENTRY(vm_page) listq;	/* pages in same object (O) */
+
+	vm_object_t object;		/* which object am I in (O,P) */
+	vm_offset_t offset;		/* offset into object (O,P) */
+	vm_offset_t phys_addr;		/* physical address of page */
+
+	u_short wire_count;		/* wired down maps refs (P) */
+	u_short flags;			/* see below */
+	short hold_count;		/* page hold count */
+	u_short act_count;		/* page usage count */
+	u_short bmapped;		/* number of buffers mapped */
+	u_short busy;			/* page busy count */
+	u_short valid;			/* map of valid DEV_BSIZE chunks */
+	u_short dirty;			/* map of dirty DEV_BSIZE chunks */
+};
+
+/*
+ * These are the flags defined for vm_page.
+ *
+ * Note: PG_FILLED and PG_DIRTY are added for the filesystems.
+ */
+#define	PG_INACTIVE	0x0001		/* page is in inactive list (P) */
+#define	PG_ACTIVE	0x0002		/* page is in active list (P) */
+#define	PG_BUSY		0x0010		/* page is in transit (O) */
+#define	PG_WANTED	0x0020		/* someone is waiting for page (O) */
+#define	PG_TABLED	0x0040		/* page is in VP table (O) */
+#define	PG_COPYONWRITE	0x0080		/* must copy page before changing (O) */
+#define	PG_FICTITIOUS	0x0100		/* physical page doesn't exist (O) */
+#define	PG_WRITEABLE	0x0200		/* page is mapped writeable */
+#define PG_MAPPED	0x0400		/* page is mapped */
+#define PG_REFERENCED	0x1000		/* page has been referenced */
+#define	PG_CACHE	0x4000		/* On VMIO cache */
+#define	PG_FREE		0x8000		/* page is in free list */
+```
+### *pv* Structure
+
+```c
+/* From /sys/i386/include/pmap.h*/
+
+/*
+ * For each vm_page_t, there is a list of all currently valid virtual
+ * mappings of that page.  An entry is a pv_entry_t, the list is pv_table.
+ */
+typedef struct pv_entry {
+	struct pv_entry	*pv_next;	/* next pv_entry */
+	pmap_t		pv_pmap;	/* pmap where mapping lies */
+	vm_offset_t	pv_va;		/* virtual address for mapping */
+} *pv_entry_t;
+```
+
 ## Code Walkthrough
 
 ### Pseudo Code Overview
@@ -371,19 +462,40 @@ typedef struct vnpager *vn_pager_t;
 
 **vm_map_insert**:
 
+1. Checks if the start address is between map-\>min\_offset and map-\>max\_offset.
+2. Checks if the entry we are trying to insert overlaps with an existing entry.
+3. Calls vm\_object\_coalesce to combine the objects of the new and previous entry if they are both anonymous mappings with prev-\>end == new-\>start.
+4. Calls vm\_map\_entry\_create to create the new entry and assigns its start, end, offset, object, and several other fields such as is\_a\_map and copy\_on\_write.
+5. Sets the default inheritance and protections for the main map.
+6. Inserts the new entry into the list with vm\_map\_entry\_link.
+7. Increments map-\>size with the size of the new entry.
+8. Updates the free space hint if it is equal to the previous entry and the previous entry contains the new entry (prev-\>end >= new-\>start).
+
 **vm_map_entry_create**:
 
-**vm_map_entry_link**:
+**vm_map_entry_link**: Standard linked list code to insert a new entry between two pre-existing entries.
 
-**vm_object_pmap_copy**:
+**vm_object_pmap_copy**: Locks the object and sets PG\_COPYONWRITE for every page in the object's pg queue whose offset into the object is between start and end.
 
-**pmap_object_init_pt**:
+**pmap_object_init_pt**: If prefaulting less than 512 pages, maps as many resident pages into the proc's va space as possible, using hash lookups for mappings < 25% object's size and using linear search for mappings > 25% object size.
+
+1. Returns if the pmap doesn't exist or the size of the mapping > 2MiB and the resident pg count > 512.
+2. Returns if we cannot lock the object.
+3. Updates size to the maximum nb of pages we are able to map if offset + size exceeds object size.
+4. If we are prefaulting < 25% of the object's pages, calls vm\_page\_lookup of each pg in the mapping and maps it into the process if it is valid. Otherwise, the object's entire pg queue is searched and pgs are mapped in if they have the appropriate offset.
+5. Unlocks the object and returns.
+
+**vm_page_lookup**: Looks up the object/offset pair in the vm\_page\_hash table, checks whether this entry is valid, and returns the vm\_page if its entry and offset matches the one used to find it in the hash table.
 
 **pmap_enter_quick**:
 
 **pmap_remove**:
 
+**get_pv_entry**:
+
 **pmap_use_pt**:
+
+**pmap_pte_vm_page**:
 
 **vm_map_protect**:
 

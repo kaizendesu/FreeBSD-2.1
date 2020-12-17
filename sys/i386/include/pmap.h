@@ -179,8 +179,8 @@ extern pmap_t		kernel_pmap;
  */
 typedef struct pv_entry {
 	struct pv_entry	*pv_next;	/* next pv_entry */
-	pmap_t		pv_pmap;	/* pmap where mapping lies */
-	vm_offset_t	pv_va;		/* virtual address for mapping */
+	pmap_t		pv_pmap;		/* pmap where mapping lies */
+	vm_offset_t	pv_va;			/* virtual address for mapping */
 } *pv_entry_t;
 
 #define	PV_ENTRY_NULL	((pv_entry_t) 0)

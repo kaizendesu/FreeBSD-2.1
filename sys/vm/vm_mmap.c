@@ -805,13 +805,12 @@ vm_mmap(map, addr, size, prot, maxprot, flags, handle, foff)
 			TAILQ_INSERT_TAIL(&object->reverse_shadow_head,
 				    user_object, reverse_shadow_list);
 
-			/*   */
+			/* Finds space in the proc's va space and inserts the mapping */
 			rv = vm_map_find(map, user_object, foff, addr, size, fitit);
 			if( rv != KERN_SUCCESS) {
 				vm_object_deallocate(user_object);
 				goto out;
 			}
-
 			/*
 			 * this is a consistancy check, gets the map entry, and should
 			 * never fail
@@ -832,11 +831,13 @@ vm_mmap(map, addr, size, prot, maxprot, flags, handle, foff)
 
 	/*
 	 * "Pre-fault" resident pages.
+	 *
+	 * If the pager's type is PG_VNODE and the pmap exists, prefault
+	 * resident pgs into the proc's page tables.
 	 */
 	if ((type == PG_VNODE) && (map->pmap != NULL)) {
 		pmap_object_init_pt(map->pmap, *addr, object, foff, size);
 	}
-
 	/*
 	 * Correct protection (default is VM_PROT_ALL). If maxprot is
 	 * different than prot, we must set both explicitly.

@@ -471,7 +471,6 @@ vm_page_remove(mem)
  *
  *	The object must be locked.  No side effects.
  */
-
 vm_page_t
 vm_page_lookup(object, offset)
 	register vm_object_t object;
@@ -484,12 +483,12 @@ vm_page_lookup(object, offset)
 	/*
 	 * Search the hash table for this object/offset pair
 	 */
-
 	bucket = &vm_page_buckets[vm_page_hash(object, offset)];
 
 	s = splhigh();
 	simple_lock(&bucket_lock);
 	for (mem = bucket->tqh_first; mem != NULL; mem = mem->hashq.tqe_next) {
+		/* Checks if the vm_page is valid */
 		VM_PAGE_CHECK(mem);
 		if ((mem->object == object) && (mem->offset == offset)) {
 			simple_unlock(&bucket_lock);

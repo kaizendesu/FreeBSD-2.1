@@ -312,7 +312,6 @@ vm_map_entry_create(map)
 
 #define KENTRY_LOW_WATER 64
 #define MAPENTRY_LOW_WATER 128
-
 	/*
 	 * This is a *very* nasty (and sort of incomplete) hack!!!!
 	 */
@@ -512,7 +511,6 @@ vm_map_insert(map, object, offset, start, end)
 	if ((start < map->min_offset) || (end > map->max_offset) ||
 	    (start >= end))
 		return (KERN_INVALID_ADDRESS);
-
 	/*
 	 * Find the entry prior to the proposed starting address; if it's part
 	 * of an existing entry, this range is bogus.
@@ -521,19 +519,21 @@ vm_map_insert(map, object, offset, start, end)
 		return (KERN_NO_SPACE);
 
 	prev_entry = temp_entry;
-
 	/*
 	 * Assert that the next entry doesn't overlap the end point.
+	 *
+	 * If the prev entry is not the last entry and prev->next->start
+	 * is less than the end of the new entry, than the new entry
+	 * overlaps an existing entry.
 	 */
 	if ((prev_entry->next != &map->header) &&
 	    (prev_entry->next->start < end))
 		return (KERN_NO_SPACE);
-
 	/*
 	 * See if we can avoid creating a new entry by extending one of our
 	 * neighbors.
 	 */
-	if (object == NULL) {
+	if (object == NULL) {	/* Anonymous memory */
 		if ((prev_entry != &map->header) &&
 		    (prev_entry->end == start) &&
 		    (map->is_main_map) &&
@@ -577,6 +577,11 @@ vm_map_insert(map, object, offset, start, end)
 	new_entry->copy_on_write = FALSE;
 	new_entry->needs_copy = FALSE;
 
+	/*
+	 * This is why we have to call vm_map_protect and
+	 * vm_map_inherit in vm_mmap. New map entries are
+	 * initialized with default prot/inheritance.
+	 */
 	if (map->is_main_map) {
 		new_entry->inheritance = VM_INHERIT_DEFAULT;
 		new_entry->protection = VM_PROT_DEFAULT;
@@ -587,10 +592,14 @@ vm_map_insert(map, object, offset, start, end)
 	 * Insert the new entry into the list
 	 */
 	vm_map_entry_link(map, prev_entry, new_entry);
-	map->size += new_entry->end - new_entry->start;
 
+	/* Increment the size of the vm map */
+	map->size += new_entry->end - new_entry->start;
 	/*
 	 * Update the free space hint
+	 *
+	 * If the hint is the previous entry and the previous entry overlaps
+	 * with the new entry, we update the hint.
 	 */
 	if ((map->first_free == prev_entry) && (prev_entry->end >= new_entry->start))
 		map->first_free = new_entry;
@@ -670,7 +679,6 @@ vm_map_lookup_entry(map, address, entry)
 				 * Save this lookup for future hints, and
 				 * return
 				 */
-
 				*entry = cur;
 				SAVE_HINT(map, cur);
 				return (TRUE);

@@ -706,10 +706,15 @@ vm_object_pmap_copy(object, start, end)
 {
 	register vm_page_t p;
 
+	/* No need to set copy-on-write for anon maps */
 	if (object == NULL)
 		return;
 
 	vm_object_lock(object);
+	/*
+	 * Set PG_COPYONWRITE for each page in the object's pg queue
+	 * whose offset into the object is between start and end.
+	 */
 	for (p = object->memq.tqh_first; p != NULL; p = p->listq.tqe_next) {
 		if ((start <= p->offset) && (p->offset < end)) {
 			vm_page_protect(p, VM_PROT_READ);
