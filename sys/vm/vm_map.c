@@ -509,7 +509,6 @@ vm_map_insert(map, object, offset, start, end)
 	/*
 	 * Check that the start and end points are not bogus.
 	 */
-
 	if ((start < map->min_offset) || (end > map->max_offset) ||
 	    (start >= end))
 		return (KERN_INVALID_ADDRESS);
@@ -518,7 +517,6 @@ vm_map_insert(map, object, offset, start, end)
 	 * Find the entry prior to the proposed starting address; if it's part
 	 * of an existing entry, this range is bogus.
 	 */
-
 	if (vm_map_lookup_entry(map, start, &temp_entry))
 		return (KERN_NO_SPACE);
 
@@ -527,7 +525,6 @@ vm_map_insert(map, object, offset, start, end)
 	/*
 	 * Assert that the next entry doesn't overlap the end point.
 	 */
-
 	if ((prev_entry->next != &map->header) &&
 	    (prev_entry->next->start < end))
 		return (KERN_NO_SPACE);
@@ -536,7 +533,6 @@ vm_map_insert(map, object, offset, start, end)
 	 * See if we can avoid creating a new entry by extending one of our
 	 * neighbors.
 	 */
-
 	if (object == NULL) {
 		if ((prev_entry != &map->header) &&
 		    (prev_entry->end == start) &&
@@ -569,7 +565,6 @@ vm_map_insert(map, object, offset, start, end)
 	/*
 	 * Create a new entry
 	 */
-
 	new_entry = vm_map_entry_create(map);
 	new_entry->start = start;
 	new_entry->end = end;
@@ -591,14 +586,12 @@ vm_map_insert(map, object, offset, start, end)
 	/*
 	 * Insert the new entry into the list
 	 */
-
 	vm_map_entry_link(map, prev_entry, new_entry);
 	map->size += new_entry->end - new_entry->start;
 
 	/*
 	 * Update the free space hint
 	 */
-
 	if ((map->first_free == prev_entry) && (prev_entry->end >= new_entry->start))
 		map->first_free = new_entry;
 
@@ -638,7 +631,6 @@ vm_map_lookup_entry(map, address, entry)
 	/*
 	 * Start looking either from the head of the list, or from the hint.
 	 */
-
 	simple_lock(&map->hint_lock);
 	cur = map->hint;
 	simple_unlock(&map->hint_lock);
@@ -668,11 +660,9 @@ vm_map_lookup_entry(map, address, entry)
 		last = cur->next;
 		cur = map->header.next;
 	}
-
 	/*
 	 * Search linearly
 	 */
-
 	while (cur != last) {
 		if (cur->end > address) {
 			if (address >= cur->start) {
@@ -708,26 +698,35 @@ vm_map_findspace(map, start, length, addr)
 	register vm_map_entry_t entry, next;
 	register vm_offset_t end;
 
+	/* Ensure start is above the map's min offset */
 	if (start < map->min_offset)
 		start = map->min_offset;
+
+	/* Check for invalid starting address */
 	if (start > map->max_offset)
 		return (1);
-
 	/*
 	 * Look for the first possible address; if there's already something
 	 * at this address, we have to start after it.
 	 */
 	if (start == map->min_offset) {
+		/*
+		 * If the first free entry isn't the first entry, start
+		 * at the end of that entry.
+		 */
 		if ((entry = map->first_free) != &map->header)
 			start = entry->end;
 	} else {
 		vm_map_entry_t tmp;
-
+		/*
+		 * Obtain the entry preceding start and
+		 * set start to the end of that entry.
+		 */
 		if (vm_map_lookup_entry(map, start, &tmp))
 			start = tmp->end;
+		/* Save the preceding entry */
 		entry = tmp;
 	}
-
 	/*
 	 * Look through the rest of the map, trying to fit a new region in the
 	 * gap between existing regions, or after the very last region.
@@ -741,9 +740,16 @@ vm_map_findspace(map, start, length, addr)
 		 * win.
 		 */
 		end = start + length;
+
+		/* Entry wraps around the max_offset. */
 		if (end > map->max_offset || end < start)
 			return (1);
+
 		next = entry->next;
+		/*
+		 * If we are at the last entry or the next entry does
+		 * not start before entry->end, we found space.
+		 */
 		if (next == &map->header || next->start >= end)
 			break;
 	}
@@ -773,24 +779,30 @@ vm_map_find(map, object, offset, addr, length, find_space)
 	register vm_offset_t start;
 	int result, s = 0;
 
+	/* Assign hint or fixed-mapping address to start */
 	start = *addr;
 
+	/* Set prio level for kernel's maps */
 	if (map == kmem_map || map == mb_map)
 		s = splhigh();
 
 	vm_map_lock(map);
 	if (find_space) {
+		/* Finds free space in the proc's va to insert the mapping */
 		if (vm_map_findspace(map, start, length, addr)) {
 			vm_map_unlock(map);
 			if (map == kmem_map || map == mb_map)
 				splx(s);
 			return (KERN_NO_SPACE);
 		}
+		/* Assign the va of the free mem to start */
 		start = *addr;
 	}
+	/* Insert the mapping at start */
 	result = vm_map_insert(map, object, offset, start, start + length);
 	vm_map_unlock(map);
 
+	/* Set the prio level back to normal */
 	if (map == kmem_map || map == mb_map)
 		splx(s);
 

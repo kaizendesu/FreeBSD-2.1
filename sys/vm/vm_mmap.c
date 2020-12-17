@@ -160,6 +160,8 @@ mmap(p, uap, retval)
 	 * to a page boundary.
 	 */
 	addr = (vm_offset_t) uap->addr;
+
+	/* Enforce constraints */
 	if (((flags & MAP_FIXED) && (addr & PAGE_MASK)) ||
 	    (ssize_t) uap->len < 0 || ((flags & MAP_ANON) && uap->fd != -1))
 		return (EINVAL);
@@ -175,6 +177,7 @@ mmap(p, uap, retval)
 		if (VM_MIN_ADDRESS > 0 && addr < VM_MIN_ADDRESS)
 			return (EINVAL);
 #endif
+		/* Handle address wrap (overflow) */
 		if (addr + size < addr)
 			return (EINVAL);
 	}
@@ -186,12 +189,13 @@ mmap(p, uap, retval)
 	 */
 	if (addr == 0 && (flags & MAP_FIXED) == 0)
 		addr = round_page(p->p_vmspace->vm_daddr + MAXDSIZ);
+
 	if (flags & MAP_ANON) {
 		/*
 		 * Mapping blank space is trivial.
 		 */
-		handle = NULL;
-		maxprot = VM_PROT_ALL;
+		handle = NULL;			/* Anon mapps have no vnode */
+		maxprot = VM_PROT_ALL;	/* All prots by default */
 	} else {
 		/*
 		 * Mapping file, get fp for validation. Obtain vnode and make
@@ -200,14 +204,18 @@ mmap(p, uap, retval)
 		if (((unsigned) uap->fd) >= fdp->fd_nfiles ||
 		    (fp = fdp->fd_ofiles[uap->fd]) == NULL)
 			return (EBADF);
-		if (fp->f_type != DTYPE_VNODE)
+		if (fp->f_type != DTYPE_VNODE)	/* DTYPE_VNODE = regular file */
 			return (EINVAL);
 		vp = (struct vnode *) fp->f_data;
+		/* Vnode type must be reg file or char dev */
 		if (vp->v_type != VREG && vp->v_type != VCHR)
 			return (EINVAL);
 		/*
 		 * XXX hack to handle use of /dev/zero to map anon memory (ala
 		 * SunOS).
+		 *
+		 * Hence, we use VCHR vnode's for zero filled pages via
+		 * /dev/zero.
 		 */
 		if (vp->v_type == VCHR && iszerodev(vp->v_rdev)) {
 			handle = NULL;
@@ -222,6 +230,11 @@ mmap(p, uap, retval)
 			 * XXX use the vnode instead?  Problem is: what
 			 * credentials do we use for determination? What if
 			 * proc does a setuid?
+			 *
+			 * The "???" below is appropriate since max prot of
+			 * exec isn't conservative at all. Why would we ever
+			 * mmap something we want to execute? Perhaps shared
+			 * libraries?
 			 */
 			maxprot = VM_PROT_EXECUTE;	/* ??? */
 			if (fp->f_flag & FREAD)
@@ -233,13 +246,18 @@ mmap(p, uap, retval)
 					maxprot |= VM_PROT_WRITE;
 				else if (prot & PROT_WRITE)
 					return (EACCES);
-			} else
+			} /* Write perm is default for priv maps */
+			  else
 				maxprot |= VM_PROT_WRITE;
+
+			/* Assign the vnode's caddr to handle */
 			handle = (caddr_t) vp;
 		}
 	}
 	error = vm_mmap(&p->p_vmspace->vm_map, &addr, size, prot, maxprot,
 	    flags, handle, (vm_offset_t) uap->pos);
+
+	/* Assign addr of the mapping to retval and return */
 	if (error == 0)
 		*retval = (int) addr;
 	return (error);
@@ -612,6 +630,10 @@ vm_mmap(map, addr, size, prot, maxprot, flags, handle, foff)
 	vm_size_t objsize;
 	struct proc *p = curproc;
 
+	/*
+	 * Handle zero sized mappings for internal calls to
+	 * vm_mmap.
+	 */
 	if (size == 0)
 		return (0);
 
@@ -628,10 +650,12 @@ vm_mmap(map, addr, size, prot, maxprot, flags, handle, foff)
 	if (foff & PAGE_MASK)
 		return (EINVAL);
 
+	/* Determine whether we will search for free space */
 	if ((flags & MAP_FIXED) == 0) {
 		fitit = TRUE;
 		*addr = round_page(*addr);
 	} else {
+		/* Return EINVAL if addr is NOT pg aligned */
 		if (*addr != trunc_page(*addr))
 			return (EINVAL);
 		fitit = FALSE;
@@ -652,13 +676,18 @@ vm_mmap(map, addr, size, prot, maxprot, flags, handle, foff)
 			foff = 0;
 	} else {
 		vp = (struct vnode *) handle;
+
+		/* Set the appropriate pager */
 		if (vp->v_type == VCHR) {
 			type = PG_DEVICE;
 			handle = (caddr_t) vp->v_rdev;
 		} else {
 			struct vattr vat;
 			int error;
-
+			/*
+			 * Call ufs_getattr to fill the stk allocated
+			 * vattr struct with data from vp's inode.
+			 */
 			error = VOP_GETATTR(vp, &vat, p->p_ucred, p);
 			if (error)
 				return (error);
@@ -666,7 +695,14 @@ vm_mmap(map, addr, size, prot, maxprot, flags, handle, foff)
 			type = PG_VNODE;
 		}
 	}
+	/*
+	 * Allocates/retrieves a pager and an object, incrementing
+	 * the ref count of the vnode and incr/setting the ref count
+	 * of the object.
+	 */
 	pager = vm_pager_allocate(type, handle, objsize, prot, foff);
+
+	/* We do not alloc pagers for PG_DEVICE */
 	if (pager == NULL)
 		return (type == PG_DEVICE ? EINVAL : ENOMEM);
 	/*
@@ -761,10 +797,15 @@ vm_mmap(map, addr, size, prot, maxprot, flags, handle, foff)
 			 * only this one reference.
 			 */
 			user_object = vm_object_allocate(object->size);
+
+			/* User_object is the shadow of object */
 			user_object->shadow = object;
+
+			/* Insert user_object at the tail of object's shadow object list */
 			TAILQ_INSERT_TAIL(&object->reverse_shadow_head,
 				    user_object, reverse_shadow_list);
 
+			/*   */
 			rv = vm_map_find(map, user_object, foff, addr, size, fitit);
 			if( rv != KERN_SUCCESS) {
 				vm_object_deallocate(user_object);

@@ -249,14 +249,11 @@ vm_object_deallocate(object)
 
 		if (object->ref_count == 0)
 			panic("vm_object_deallocate: object deallocated too many times");
-
 		/*
 		 * The cache holds a reference (uncounted) to the object; we
 		 * must lock it before removing the object.
 		 */
-
 		vm_object_cache_lock();
-
 		/*
 		 * Lose the reference
 		 */

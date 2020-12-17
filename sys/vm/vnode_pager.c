@@ -144,7 +144,6 @@ vnode_pager_alloc(handle, size, prot, offset)
 		tsleep(vp, PVM, "vnpobj", 0);
 	}
 	vp->v_flag |= VOLOCK;
-
 	/*
 	 * If the object is being terminated, wait for it to
 	 * go away.
@@ -156,13 +155,11 @@ vnode_pager_alloc(handle, size, prot, offset)
 	if (object != NULL)
 		pager = object->pager;
 	if (pager == NULL) {
-
 		/*
 		 * Allocate pager structures
 		 */
 		pager = (vm_pager_t) malloc(sizeof *pager, M_VMPAGER, M_WAITOK);
 		vnp = (vn_pager_t) malloc(sizeof *vnp, M_VMPGDATA, M_WAITOK);
-
 		/*
 		 * And an object of the appropriate size
 		 */
@@ -170,7 +167,6 @@ vnode_pager_alloc(handle, size, prot, offset)
 		object->flags = OBJ_CANPERSIST;
 		vm_object_enter(object, pager);
 		object->pager = pager;
-
 		/*
 		 * Hold a reference to the vnode and initialize pager data.
 		 */
@@ -186,7 +182,6 @@ vnode_pager_alloc(handle, size, prot, offset)
 		pager->pg_data = (caddr_t) vnp;
 		vp->v_vmdata = (caddr_t) object;
 	} else {
-
 		/*
 		 * vm_object_lookup() will remove the object from the cache if
 		 * found and also gain a reference to the object.
@@ -197,6 +192,10 @@ vnode_pager_alloc(handle, size, prot, offset)
 	if (vp->v_type == VREG)
 		vp->v_flag |= VVMIO;
 
+	/*
+	 * Release vnode lock and wakeup any proc's 
+	 * sleeping on it.
+	 */
 	vp->v_flag &= ~VOLOCK;
 	if (vp->v_flag & VOWANT) {
 		vp->v_flag &= ~VOWANT;

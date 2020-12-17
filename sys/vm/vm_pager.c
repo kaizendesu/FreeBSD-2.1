@@ -166,6 +166,14 @@ vm_pager_allocate(type, handle, size, prot, off)
 
 	ops = (type == PG_DFLT) ? dfltpagerops : pagertab[type];
 	if (ops)
+		/*
+		 * Calls the appropriate allocation function based on
+		 * the pager type. These functions include:
+		 *
+		 * vnode_pager_alloc
+		 * swap_pager_alloc
+		 * device_pager_alloc
+		 */
 		return ((*ops->pgo_alloc) (handle, size, prot, off));
 	return (NULL);
 }

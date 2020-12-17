@@ -293,6 +293,13 @@ ufs_getattr(ap)
 	register struct inode *ip = VTOI(vp);
 	register struct vattr *vap = ap->a_vap;
 
+	/*
+	 * From /sys/ufs/ufs/inode.h:
+	 *
+	 * XXX this is too long to be a macro, and isn't used
+	 * in any time-critical place; in fact it is only used
+	 * in ufs_vnops.c so it shouldn't be in a header file.
+	 */
 	ITIMES(ip, &time, &time);
 	/*
 	 * Copy from inode table
@@ -310,6 +317,7 @@ ufs_getattr(ap)
 	vap->va_ctime = ip->i_ctime;
 	vap->va_flags = ip->i_flags;
 	vap->va_gen = ip->i_gen;
+
 	/* this doesn't belong here */
 	if (vp->v_type == VBLK)
 		vap->va_blocksize = BLKDEV_IOSIZE;
