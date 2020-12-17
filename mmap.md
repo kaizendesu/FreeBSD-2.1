@@ -51,41 +51,41 @@ where each function per filename is listed in the order that it is called.
 
 ```txt
 File: vm_mmap.c
-	mmap
-	vm_mmap
+	mmap					----
+	vm_mmap					----
 
 File: ufs_vnops.c
-	ufs_getattr
+	ufs_getattr				----
 
 File: vm_pager.c
-	vm_pager_allocate
+	vm_pager_allocate		----
 
 File: vm_object.c
-	vm_object_allocate
-	_vm_object_allocate
-	vm_object_lookup
-	vm_object_deallocate
-	vm_object_remove
-	vm_object_terminate
-	_vm_object_page_clean
-	vm_object_pmap_copy
+	vm_object_allocate		----
+	_vm_object_allocate		----
+	vm_object_lookup		----
+	vm_object_deallocate	----
+	vm_object_remove		----
+	vm_object_terminate		----
+	_vm_object_page_clean	----
+	vm_object_pmap_copy		----
 
 File: vm_map.c
-	vm_map_find
-	vm_map_findspace
-	vm_map_insert
-	vm_map_entry_create
-	vm_map_entry_link
-	vm_map_lookup_entry
-	vm_map_protect
-	vm_map_inherit
+	vm_map_find				----
+	vm_map_findspace		----
+	vm_map_insert			----
+	vm_map_entry_create		----
+	vm_map_entry_link		----
+	vm_map_lookup_entry		----
+	vm_map_protect			----
+	vm_map_inherit			----
 
 File: pmap.c
-	pmap_object_init_pt
-	pmap_enter_quick
-	pmap_remove
-	pmap_use_pt
-	pmap_protect
+	pmap_object_init_pt		----
+	pmap_enter_quick		----
+	pmap_remove				----
+	pmap_use_pt				----
+	pmap_protect			----
 ```
 
 ## Important Data Structures
