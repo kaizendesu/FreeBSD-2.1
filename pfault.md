@@ -18,8 +18,30 @@ _alltraps
 				vm_map_lookup
 					vm_map_lookup_entry
 					vm_object_shadow
-				vm_page_lookup
+				vm_page_lookup	
 				tsleep
+					timeout
+					unsleep
+					mi_switch
+					untimeout
+				vm_page_unqueue
+				vm_page_activate
+				vm_page_alloc
+					vm_page_remove
+					vm_page_insert
+				vm_fault_additional_pages
+					vm_pager_has_page
+					vm_fault_page_lookup
+				vm_pager_get_pages
+					vm_page_free
+				vm_page_zero_fill
+					pmap_zero_page
+				vm_page_copy
+					pmap_copy_page
+				vm_object_collapse
+				pmap_enter
+				vm_page_wire
+				vm_page_unwire
 			pmap_use_pt
 			pmap_unuse_pt
 ```
@@ -47,6 +69,8 @@ File: vm_machdep.c
 
 File: vm_fault.c
 	vm_fault
+	vm_fault_additional_pages
+	vm_fault_page_lookup
 
 File: vm_map.c
 	vm_map_lookup
@@ -54,16 +78,39 @@ File: vm_map.c
 
 File: vm_object.c
 	vm_object_shadow
+	vm_object_collapse
 
 File: vm_page.c
 	vm_page_lookup
+	vm_page_alloc
+	vm_page_remove
+	vm_page_insert
 	vm_page_unqueue
 	vm_page_activate
+	vm_page_alloc
+	vm_page_free
+	vm_page_zero_fill
+	vm_page_copy
+	vm_page_wire
+	vm_page_unwire
 
 File: kern_synch.c
 	tsleep
+	unsleep
+	mi_switch
+
+File: kern_clock.c
+	timeout
+	untimeout
+
+File: vm_pager.c
+	vm_pager_has_page
+	vm_pager_get_pages
 
 File: pmap.c
+	pmap_zero_page
+	pmap_copy_page
+	pmap_enter
 	pmap_use_pt
 	pmap_unuse_pt
 ```
