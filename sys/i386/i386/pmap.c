@@ -265,10 +265,24 @@ pmap_pte_vm_page(pmap, pt)
 {
 	vm_page_t m;
 
-	/* i386_trunc_page(x) ((unsigned)(x) & ~(NBPG-1)) */
+	/*
+	 * Clear away the pg table idx bits and 2 lsb of the
+	 * pg dir idx of va.
+	 */
 	pt = i386_trunc_page(pt);
+	/*
+	 * Gives the pg diff between pt and UPT_MIN_ADDRESS
+	 * and right shifts by 12 bits to obtain a the
+	 * pg dir idx.
+	 */
 	pt = (pt - UPT_MIN_ADDRESS) / NBPG;
+	/*
+	 * Obtain the pa of the pg table page containing pt
+	 * and clear away its top 20 bits.
+	 */
 	pt = ((vm_offset_t) pmap->pm_pdir[pt]) & PG_FRAME;
+
+	/* PHYS_TO_VM_PAGE(pa) (&vm_page_array[atop(pa) - first_page]) */
 	m = PHYS_TO_VM_PAGE(pt);
 	return m;
 }
@@ -286,7 +300,13 @@ pmap_use_pt(pmap, va)
 	if ((va >= UPT_MIN_ADDRESS) || !pmap_initialized)
 		return;
 
+	/* Assign va's pte to pt */
 	pt = (vm_offset_t) vtopte(va);
+	/*
+	 * Call pmap_pte_vm_page to obtain the vm_page of
+	 * the page table that contains pt and incr its
+	 * ref count.
+	 */
 	vm_page_hold(pmap_pte_vm_page(pmap, pt));
 }
 
@@ -1411,21 +1431,33 @@ pmap_enter_quick(pmap, va, pa)
 	 * #define vtopte(va)   (PTmap + i386_btop(va))
 	 *
 	 * Hence, we use the pg dir and pg tbl idxs as a composite pte idx
-	 * and add it to PTmap to obtain the pa of the page table
+	 * and add it to PTmap to obtain the address of the pg table entry
 	 * corresponding to va.
+	 *
+	 * In other words, pte is the address of the pte that will map
+	 * the physical page pa.
 	 */
 	pte = vtopte(va);
 
 	/* a fault on the page table might occur here
 	 *
-	 * In other words, dereferencing the ptr to the pg table page
-	 * can cause a page fault.
+	 * In other words, dereferencing the ptr of the pte
+	 * can cause a page fault on the page table page
+	 * containing the entry.
 	 */
 	if (*pte) {
 		/* Remove the proc's old mapping at va */
 		pmap_remove(pmap, va, va + PAGE_SIZE);
 	}
 	/*
+	 * pa and vm_first_phys are both page aligned, so when we
+	 * take their diff we obtain the index of pa. This index
+	 * is simply pa's page number in the vm system.
+	 *
+	 * In order to use this index, we need to right shift it
+	 * by 12 bits so that the index is not page aligned.
+	 *
+	 * page aligned
 	 * #define atop(x)       ((unsigned)(x) >> PG_SHIFT)
 	 * #define pa_index(pa)  atop(pa - vm_first_phys)
 	 * #define pa_to_pvh(pa) (&pv_table[pa_index(pa)])
@@ -1463,10 +1495,14 @@ pmap_enter_quick(pmap, va, pa)
 	/*
 	 * Now validate mapping with desired protection/wiring.
 	 *
-	 * Recall that pte is an entry pointing to a page tbl page.
+	 * We assign the pa of the pg frame to the pte.
 	 */
 	*pte = (pt_entry_t) ((int) (pa | PG_V | PG_u));
-
+	/*
+	 * Increments the ref count on the vm_page representing
+	 * the physical pg that is being used as the pg tbl pg
+	 * containing the pte we just mapped.
+	 */
 	pmap_use_pt(pmap, va);
 
 	return;

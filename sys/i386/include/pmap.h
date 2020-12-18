@@ -73,6 +73,7 @@ typedef unsigned int *pt_entry_t;
 #endif
 
 #define	NUPDE		(NPTEPG-NKPDE)	/* number of user pde's */
+									/* 1024 - 63 = 961 */
 
 /*
  * The *PTDI values control the layout of virtual memory

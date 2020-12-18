@@ -90,7 +90,7 @@ File: vm_map.c
 File: pmap.c
 	pmap_object_init_pt		++--
 	pmap_enter_quick		++--
-	pmap_remove				----
+	pmap_remove				+---
 	get_pv_entry			++--
 	pmap_use_pt				++--
 	pmap_pte_vm_page		++--
@@ -487,15 +487,15 @@ typedef struct pv_entry {
 
 **vm_page_lookup**: Looks up the object/offset pair in the vm\_page\_hash table, checks whether this entry is valid, and returns the vm\_page if its entry and offset matches the one used to find it in the hash table.
 
-**pmap_enter_quick**:
+**pmap_enter_quick**: Calls pmap\_remove to remove the old mapping at va, updates/initializes the pv\_entry corresponding to the physical pg we want to map, assigns pa to the pte corresponding to va, and increments the ref count on the vm\_page of the physical pg that contains the pte we just assigned to.
 
-**pmap_remove**:
+**pmap_remove**: Removes the pv entry associated with pmap and va.
 
-**get_pv_entry**:
+**get_pv_entry**: Obtains a new pv\_entry from either the free list or newly allocated a page of pv\_entries.
 
-**pmap_use_pt**:
+**pmap_use_pt**: Ensures that the pmap is initialized and that va < UPT\_MIN\_ADDRESS, and calls vm\_page\_hold on pmap\_pte\_vm\_page to increment the ref count on the vm\_page corersponding to the pte.
 
-**pmap_pte_vm_page**:
+**pmap_pte_vm_page**: Obtains the vm\_page corresponding to the physical page of memory that is being used as the pg tbl pg for the pte of va.
 
 **vm_map_protect**:
 
