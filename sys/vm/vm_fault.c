@@ -1115,7 +1115,6 @@ vm_fault_additional_pages(first_object, first_offset, m, rbehind, raheada, marra
 	/*
 	 * if the requested page is not available, then give up now
 	 */
-
 	if (!vm_pager_has_page(object->pager, object->paging_offset + offset))
 		return 0;
 

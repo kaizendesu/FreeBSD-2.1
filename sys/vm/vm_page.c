@@ -770,6 +770,8 @@ vm_page_free(mem)
 	vm_page_unqueue(mem);
 
 	flags = mem->flags;
+
+	/* Is the page busy, free, or have mapped bufs (considered busy)? */
 	if (mem->bmapped || mem->busy || flags & (PG_BUSY|PG_FREE)) {
 		if (flags & PG_FREE)
 			panic("vm_page_free: freeing free page");
@@ -778,11 +780,15 @@ vm_page_free(mem)
 		panic("vm_page_free: freeing busy page");
 	}
 
+	/* Wakeup any procs waiting for this page */
 	if ((flags & PG_WANTED) != 0)
 		wakeup((caddr_t) mem);
-	if ((flags & PG_FICTITIOUS) == 0) {
 
+	/* If the physical page exists */
+	if ((flags & PG_FICTITIOUS) == 0) {
 		simple_lock(&vm_page_queue_free_lock);
+
+		/* Decrement wire count */
 		if (mem->wire_count) {
 			if (mem->wire_count > 1) {
 				printf("vm_page_free: wire count > 1 (%d)", mem->wire_count);
@@ -791,9 +797,10 @@ vm_page_free(mem)
 			cnt.v_wire_count--;
 			mem->wire_count = 0;
 		}
+
+		/* Mark the page as free and insert it into the free queue */
 		mem->flags |= PG_FREE;
 		TAILQ_INSERT_TAIL(&vm_page_queue_free, mem, pageq);
-
 		simple_unlock(&vm_page_queue_free_lock);
 		splx(s);
 		/*
@@ -804,7 +811,6 @@ vm_page_free(mem)
 			wakeup((caddr_t) &vm_pageout_pages_needed);
 			vm_pageout_pages_needed = 0;
 		}
-
 		cnt.v_free_count++;
 		/*
 		 * wakeup processes that are waiting on memory if we hit a

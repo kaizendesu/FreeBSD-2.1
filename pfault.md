@@ -30,7 +30,10 @@ _alltraps
 				vm_page_activate
 				vm_pager_has_page
 					swap_pager_haspage
-					_swap_pager_hashpage
+					_swap_pager_haspage
+					vnode_pager_haspage
+						incore
+						ufs_bmap
 				vm_page_alloc
 					vm_page_remove
 					vm_page_insert
@@ -38,10 +41,15 @@ _alltraps
 					vm_fault_page_lookup
 				vm_pager_get_pages
 					vm_page_free
+					swap_pager_getpage
+					vnode_pager_getpage
+						vnode_pager_input
 				vm_page_zero_fill
 					pmap_zero_page
+						pmap_update
 				vm_page_copy
 					pmap_copy_page
+						pmap_update
 				vm_object_collapse
 				pmap_enter
 				vm_page_wire
@@ -75,7 +83,7 @@ File: vm_machdep.c
 
 File: vm_fault.c
 	vm_fault					+---
-	vm_fault_additional_pages	----
+	vm_fault_additional_pages	+---
 	vm_fault_page_lookup		----
 
 File: vm_map.c
@@ -88,6 +96,8 @@ File: vm_object.c
 
 File: vnode_pager.c
 	vnode_pager_lock			++--
+	vnode_pager_getpage			++--
+	vnode_pager_input			----
 
 File: vm_page.c
 	vm_page_lookup				++--
@@ -97,9 +107,9 @@ File: vm_page.c
 	vm_page_unqueue				++--
 	vm_page_activate			----
 	vm_page_alloc				++--
-	vm_page_free				----
-	vm_page_zero_fill			----
-	vm_page_copy				----
+	vm_page_free				++--
+	vm_page_zero_fill			++--
+	vm_page_copy				++--
 	vm_page_wire				----
 	vm_page_unwire				----
 
@@ -114,18 +124,29 @@ File: kern_clock.c
 
 File: vm_pager.c
 	vm_pager_has_page			++--
-	vm_pager_get_pages			----
+	vm_pager_get_pages			++--
 
 File: swap_pager.c
 	swap_pager_haspage			++--
 	_swap_pager_haspage			++--
+	swap_pager_getpage			++--
+	swap_pager_input			----
+
+File: vfs_bio.c
+	incore						++--
+
+File: ufs_bmap.c
+	ufs_bmap					----
 
 File: pmap.c
-	pmap_zero_page				----
-	pmap_copy_page				----
+	pmap_zero_page				++--
+	pmap_copy_page				++--
 	pmap_enter					----
 	pmap_use_pt					++--
 	pmap_unuse_pt				----
+
+File: cpufunc.h
+	pmap_update					++--
 ```
 
 ## Important Data Structures
@@ -403,6 +424,44 @@ struct vm_page {
 #define	PG_FREE		0x8000		/* page is in free list */
 ```
 
+### *vm\_pager* and *pagerops* Structures
+
+```c
+/* From /sys/vm/vm_pager.h */
+ 
+struct pager_struct {
+	TAILQ_ENTRY(pager_struct) pg_list;	/* links for list management */
+	void *pg_handle;		/* ext. handle (vp, dev, fp) */
+	int pg_type;			/* type of pager */
+	struct pagerops *pg_ops;	/* pager operations */
+	void *pg_data;			/* private pager data */
+};
+
+/* pager types */
+#define PG_DFLT		-1
+#define	PG_SWAP		0
+#define	PG_VNODE	1
+#define PG_DEVICE	2
+
+/* flags */
+#define PG_CLUSTERGET	1
+#define PG_CLUSTERPUT	2
+
+struct pagerops {
+	void (*pgo_init) __P((void));		/* Initialize pager. */
+	vm_pager_t(*pgo_alloc) __P((void *, vm_size_t, vm_prot_t, vm_offset_t));	/* Allocate pager. */
+	void (*pgo_dealloc) __P((vm_pager_t));	/* Disassociate. */
+	int (*pgo_getpage) __P((vm_pager_t, vm_page_t, boolean_t));
+	int (*pgo_getpages) __P((vm_pager_t, vm_page_t *, int, int, boolean_t));	/* Get (read) page. */
+	int (*pgo_putpage) __P((vm_pager_t, vm_page_t, boolean_t));
+	int (*pgo_putpages) __P((vm_pager_t, vm_page_t *, int, boolean_t, int *)); /* Put (write) page. */
+	boolean_t(*pgo_haspage) __P((vm_pager_t, vm_offset_t)); /* Does pager have page? */
+};
+
+#define	VM_PAGER_GET(pg, m, s)		(*(pg)->pg_ops->pgo_getpage)(pg, m, s)
+#define	VM_PAGER_GET_MULTI(pg, m, c, r, s)	(*(pg)->pg_ops->pgo_getpages)(pg, m, c, r, s)
+```
+
 ## Code Walkthrough
 
 ### Pseudo Code Descriptions
@@ -432,7 +491,8 @@ struct vm_page {
 6. While Loop: Calls vm\_page\_alloc to allocate a page in the current object and set it to PG\_BUSY.
 7. While Loop: If the object has a vnode/swap pager and we are not changing the page's wiring it...
 	* Unlocks the object
-	* Calls vm\_fault\_additional\_pages and vm\_pager\_get\_pages 
+	* Calls vm\_fault\_additional\_pages to see if there are any additional pages we can fault in for space locality
+	* Calls vm\_pager\_get\_pages to obtain the paes from disk/swap
 
 **vm_map_lookup**:
 
@@ -491,12 +551,16 @@ struct vm_page {
 
 \_**swap_pager_haspage**: Uses 2D row/col arithmetic to determine whether the swap blk for the pg's offset is empty or not, returning TRUE if this region is not empty.
 
+**vnode_pager_haspage**: Divides the offset by the mounted filesystem's block size to get the blkno, calls incore by passing this blkno, and calls ufs\_bmap if incore returns FALSE.
+
+**incore**: Uses the vnode/blkno pair to search the buffer hash table.
+
 **vm_page_alloc**:
 
 1. Upgrades the allocation class for the page daemon if it isn't VM\_ALLOC\_INTERRUPT.
 2. Locks the free page queue.
 3. Switches on the allocation class, determing whether there is enough pgs in each pg queue to allocate the request.
-	* VM\_ALLOC\+NORMAL takes a pg from the free pg queue if free\_count > free\_reserved, otherwise it tries to take the LRU pg from the pg cache
+	* VM\_ALLOC\_NORMAL takes a pg from the free pg queue if free\_count > free\_reserved, otherwise it tries to take the LRU pg from the pg cache
 	* VM\_ALLOC\_SYSTEM takes a pg from the free pg queue if the free\_count >= interrupt free min and either free\_count >= free\_reserved or cache\_count == 0. Otherwise, tries to take the LRU pg from the pg cache.
 	* VM\_ALLOC\_INTERRUPT takes pgs from the free pg queue until its all gone
 	* Calls pagedaemon\_wakeup if any of these switch cases fail to obtain a pg.
@@ -521,21 +585,45 @@ struct vm_page {
 4. Inserts the pg at the tail of the object's pg queue.
 5. Sets PG\_TABLED and increments resident\_page\_count.  
 
-**vm_fault_additional_pages**:
+**vm_fault_additional_pages**: Checks whether there is enough memory to fault in ra/rb pages and returns a pg array of pgs to fault along with the index of the req pg.
 
 **vm_fault_page_lookup**:
 
 **vm_pager_get_pages**:
 
+1. If the pager is NULL, loops through the marray:
+	* Calls PAGE\_WAKEUP and vm\_page\_free for ra/rb pgs.
+	* Calls vm\_page\_zero\_fill for the req page.
+	* Returns VM\_PAGER\_OK.
+2. If the pager does not have the pgo\_getpages op, calls PAGE\_WAKEUP on all ra/rb pages and pgo\_getpage on the req page. Otherwise, calls pgo\_getpages.
+
+**swap_pager_getpage**: Assigns pg to a marray and uses it to call swap\_pager\_input.
+
+**vnode_pager_getpage**: Assigns pg to a marray and uses it to call vnode\_pager\_input.
+
+**vnode_pager_input**:
+
 **vm_page_free**:
 
-**vm_page_zero_fill**:
+1. Calls vm\_page\_remove to remove the pg from the vm\_page\_hash table, remove it from the object's memq, decrements resident\_page\_count, and clears PG\_TABLED.
+2. Calls vm\_page\_unqueue to remove the pg from the active queue
+3. Checks if it is freeing a busy or free page and panicks if it is.
+4. Wakes up any processes sleeping on this page.
+5. If the physical page exists:
+	* Decrements the wire count
+	* Marks the pg free and inserts it into the free pg queue
+	* Wakes up the pageout daemon, any procs waiting on high water mark mem, and the scheduler to swap in procs.
+6. Increments v\_tfree and returns.  
 
-**pmap_zero_page**:
+**vm_page_zero_fill**: Checks if the page is valid, calls pmap\_zero\_page, and sets all disk blks valid in the page.
 
-**vm_page_copy**:
+**pmap_zero_page**: Checks if CMAP2 is busy, assigns CMAP2 the pte of the page we want to clear, calls bzero on CADDR2 to clear the page, invalidates the pte at CMAP2, and calls pmap\_update.
 
-**pmap_copy_page**:
+**vm_page_copy**: Checks if the source and destination pages are valid, calls pmap\_copy\_page, and sets all disk blks valid in the dest page.
+
+**pmap_copy_page**: Checks if CMAP1 and CMAP2 are busy, assigns the pte of the source page to CMAP1 and the pte of the destination page to CMAP2, and calls either memcpy or bcopy to copy the pages, invalidates the ptes at CMAP1 and CMAP2, and calls pmap\_update.
+
+**pmap_update**: Flushes the TLB by reloading the CR3 register.
 
 **vm_object_collapse**:
 

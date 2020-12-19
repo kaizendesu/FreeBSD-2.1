@@ -403,6 +403,29 @@ pmap_bootstrap(firstaddr, loadaddr)
 	va = virtual_avail;
 	pte = pmap_pte(kernel_pmap, va);
 
+	/*
+	 * Translation:
+	 *
+	 * CADDR1 = (caddr_t)va;
+	 * va += (1*NBPG);
+	 * CMAP1 = pte;
+	 * pte += 1;
+	 *
+	 * CADDR2 = (caddr_t)va;
+	 * va += (1*NBPG);
+	 * CMAP2 = pte;
+	 * pte += 1;
+	 *
+	 * ptvmmap = (caddr_t)va;
+	 * va += (1*NBPG);
+	 * ptmmap = pte;
+	 * pte += 1;
+	 *
+	 * msgbufp = (struct msgbuf *)va;
+	 * va += (1*NBPG);
+	 * msgbufmap = pte;
+	 * pte += 1;
+	 */
 	SYSMAP(caddr_t, CMAP1, CADDR1, 1)
 	    SYSMAP(caddr_t, CMAP2, CADDR2, 1)
 	    SYSMAP(caddr_t, ptmmap, ptvmmap, 1)
@@ -1805,11 +1828,27 @@ pmap_zero_page(phys)
 {
 	if (*(int *) CMAP2)
 		panic("pmap_zero_page: CMAP busy");
-
+	/*
+	 * CMAP2 is the pte of the va CADDR2. This means that
+	 * we can set the pte to point to any pg frame we want
+	 * and modify that pg frame through va CADDR2.
+	 */
 	*(int *) CMAP2 = PG_V | PG_KW | i386_trunc_page(phys);
 	bzero(CADDR2, NBPG);
 
+	/* Unmap CADDR2 by invalidating its pte */
 	*(int *) CMAP2 = 0;
+
+	/*
+	 * From /sys/i386/include/cpufunc.h
+	 *
+	 * static __inline void
+	 * pmap_update(void) {
+	 *		u_long temp;
+	 *		__asm __volatile("movl %%cr3,%0; movl%0,%%cr3" : "=r" (temp)
+	 *				: : "memory");
+	 * }
+	 */
 	pmap_update();
 }
 
@@ -1827,6 +1866,7 @@ pmap_copy_page(src, dst)
 	if (*(int *) CMAP1 || *(int *) CMAP2)
 		panic("pmap_copy_page: CMAP busy");
 
+	/* CMAP1 is the pte of CADDR1 and CMAP2 is the pte of CADDR2 */
 	*(int *) CMAP1 = PG_V | PG_KW | i386_trunc_page(src);
 	*(int *) CMAP2 = PG_V | PG_KW | i386_trunc_page(dst);
 
@@ -1835,8 +1875,20 @@ pmap_copy_page(src, dst)
 #else
 	bcopy(CADDR1, CADDR2, NBPG);
 #endif
+	/* Unmap CADDR1/CADDR by invalidating their ptes */
 	*(int *) CMAP1 = 0;
 	*(int *) CMAP2 = 0;
+
+	/*
+	 * From /sys/i386/include/cpufunc.h
+	 *
+	 * static __inline void
+	 * pmap_update(void) {
+	 *		u_long temp;
+	 *		__asm __volatile("movl %%cr3,%0; movl%0,%%cr3" : "=r" (temp)
+	 *				: : "memory");
+	 * }
+	 */
 	pmap_update();
 }
 

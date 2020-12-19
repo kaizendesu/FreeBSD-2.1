@@ -253,7 +253,6 @@ vnode_pager_getpage(pager, m, sync)
 	vm_page_t m;
 	boolean_t sync;
 {
-
 	vm_page_t marray[1];
 
 	if (pager == NULL)
@@ -309,12 +308,12 @@ vnode_pager_haspage(pager, offset)
 	if ((vp->v_mount == NULL) || (offset >= vnp->vnp_size))
 		return FALSE;
 
+	/* Divide offset by the fs's blk size to determine its blk nb */
 	block = offset / vp->v_mount->mnt_stat.f_iosize;
 	if (incore(vp, block))
 		return TRUE;
-
 	/*
-	 * Read the index to find the disk block to read from.  If there is no
+	 * Read the index to find the disk block to read from. If there is no
 	 * block, report that we don't have this data.
 	 *
 	 * Assumes that the vnode has whole page or nothing.
