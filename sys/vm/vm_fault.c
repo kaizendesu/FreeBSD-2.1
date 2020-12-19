@@ -187,12 +187,10 @@ vm_fault(map, vaddr, fault_type, change_wiring)
 
 
 RetryFault:;
-
 	/*
 	 * Find the backing store object and offset into it to begin the
 	 * search.
 	 */
-
 	if ((result = vm_map_lookup(&map, vaddr, fault_type, &entry, &first_object,
 	    &first_offset, &prot, &wired, &su)) != KERN_SUCCESS) {
 		return (result);
@@ -206,19 +204,16 @@ RetryFault:;
 		fault_type = prot;
 
 	first_m = NULL;
-
 	/*
 	 * Make a reference to this object to prevent its disposal while we
 	 * are messing with it.  Once we have the reference, the map is free
 	 * to be diddled.  Since objects reference their shadows (and copies),
 	 * they will stay around as well.
 	 */
-
 	vm_object_lock(first_object);
 
 	first_object->ref_count++;
 	first_object->paging_in_progress++;
-
 	/*
 	 * INVARIANTS (through entire routine):
 	 *
@@ -250,14 +245,11 @@ RetryFault:;
 	/*
 	 * Search for the page at object/offset.
 	 */
-
 	object = first_object;
 	offset = first_offset;
-
 	/*
 	 * See whether this page is resident
 	 */
-
 	while (TRUE) {
 		m = vm_page_lookup(object, offset);
 		if (m != NULL) {
@@ -291,7 +283,6 @@ RetryFault:;
 				VM_WAIT;
 				goto RetryFault;
 			}
-
 			/*
 			 * Mark page busy for other threads, and the pagedaemon.
 			 */
@@ -323,7 +314,6 @@ RetryFault:;
 			/*
 			 * Allocate a new page for this object/offset pair.
 			 */
-
 			m = vm_page_alloc(object, offset, VM_ALLOC_NORMAL);
 
 			if (m == NULL) {
@@ -359,7 +349,6 @@ readrest:
 			    first_object, first_offset,
 			    m, VM_FAULT_READ_BEHIND, VM_FAULT_READ_AHEAD,
 			    marray, &reqpage);
-
 			/*
 			 * Call the pager to retrieve the data, if any, after
 			 * releasing the lock on the map.
@@ -375,7 +364,6 @@ readrest:
 				 * with it.
 				 */
 				vm_object_lock(object);
-
 				/*
 				 * Relookup in case pager changed page. Pager
 				 * is responsible for disposition of old page
@@ -405,7 +393,6 @@ readrest:
 			 * past us, and inserting the page in that object at
 			 * the same time that we are.
 			 */
-
 			if (rv == VM_PAGER_ERROR)
 				printf("vm_fault: pager input (probably hardware) error, PID %d failure\n",
 				    curproc->p_pid);
@@ -437,12 +424,10 @@ readrest:
 		 */
 		if (object == first_object)
 			first_m = m;
-
 		/*
 		 * Move on to the next object.  Lock the next object before
 		 * unlocking the current one.
 		 */
-
 		offset += object->shadow_offset;
 		next_object = object->shadow;
 		if (next_object == NULL) {
@@ -478,27 +463,21 @@ readrest:
 
 	if ((m->flags & PG_BUSY) == 0)
 		panic("vm_fault: not busy after main loop");
-
 	/*
 	 * PAGE HAS BEEN FOUND. [Loop invariant still holds -- the object lock
 	 * is held.]
 	 */
-
 	old_m = m;	/* save page that would be copied */
-
 	/*
 	 * If the page is being written, but isn't already owned by the
 	 * top-level object, we have to copy it into a new page owned by the
 	 * top-level object.
 	 */
-
 	if (object != first_object) {
 		/*
 		 * We only really need to copy if we want to write it.
 		 */
-
 		if (fault_type & VM_PROT_WRITE) {
-
 			/*
 			 * If we try to collapse first_object at this point,
 			 * we may deadlock when we try to get the lock on an
@@ -519,10 +498,8 @@ readrest:
 			 * We already have an empty page in first_object - use
 			 * it.
 			 */
-
 			vm_page_copy(m, first_m);
 			first_m->valid = VM_PAGE_BITS_ALL;
-
 			/*
 			 * If another map is truly sharing this page with us,
 			 * we have to flush all uses of the original page,
@@ -533,30 +510,25 @@ readrest:
 			 * page, then we could avoid the pmap_page_protect()
 			 * call.
 			 */
-
 			vm_page_lock_queues();
 
 			if ((m->flags & PG_ACTIVE) == 0)
 				vm_page_activate(m);
 			vm_page_protect(m, VM_PROT_NONE);
 			vm_page_unlock_queues();
-
 			/*
 			 * We no longer need the old page or object.
 			 */
 			PAGE_WAKEUP(m);
 			vm_object_pip_wakeup(object);
 			vm_object_unlock(object);
-
 			/*
 			 * Only use the new page below...
 			 */
-
 			cnt.v_cow_faults++;
 			m = first_m;
 			object = first_object;
 			offset = first_offset;
-
 			/*
 			 * Now that we've gotten the copy out of the way,
 			 * let's try to collapse the top object.
@@ -574,7 +546,6 @@ readrest:
 			m->flags |= PG_COPYONWRITE;
 		}
 	}
-
 	/*
 	 * If the page is being written, but hasn't been copied to the
 	 * copy-object, we have to copy it there.
@@ -584,7 +555,6 @@ RetryCopy:
 		vm_object_t copy_object = first_object->copy;
 		vm_offset_t copy_offset;
 		vm_page_t copy_m;
-
 		/*
 		 * We only need to copy if we want to write it.
 		 */
@@ -640,7 +610,6 @@ RetryCopy:
 			 * pager has the data in secondary storage.
 			 */
 			if (!page_exists) {
-
 				/*
 				 * If we don't allocate a (blank) page here...
 				 * another thread could try to page it in,
@@ -672,7 +641,6 @@ RetryCopy:
 					    (copy_offset + copy_object->paging_offset));
 
 					vm_object_lock(copy_object);
-
 					/*
 					 * Since the map is unlocked, someone
 					 * else could have copied this object
@@ -711,7 +679,6 @@ RetryCopy:
 				 */
 				vm_page_copy(m, copy_m);
 				copy_m->valid = VM_PAGE_BITS_ALL;
-
 				/*
 				 * Things to remember: 1. The copied page must
 				 * be marked 'dirty' so it will be paged out
@@ -744,23 +711,19 @@ RetryCopy:
 			m->flags &= ~PG_COPYONWRITE;
 		}
 	}
-
 	/*
 	 * We must verify that the maps have not changed since our last
 	 * lookup.
 	 */
-
 	if (!lookup_still_valid) {
 		vm_object_t retry_object;
 		vm_offset_t retry_offset;
 		vm_prot_t retry_prot;
-
 		/*
 		 * Since map entries may be pageable, make sure we can take a
 		 * page fault on them.
 		 */
 		vm_object_unlock(object);
-
 		/*
 		 * To avoid trying to write_lock the map while another thread
 		 * has it read_locked (in vm_map_pageable), we do not try for
@@ -773,13 +736,11 @@ RetryCopy:
 		    &entry, &retry_object, &retry_offset, &retry_prot, &wired, &su);
 
 		vm_object_lock(object);
-
 		/*
 		 * If we don't need the page any longer, put it on the active
 		 * list (the easiest thing to do here).  If no one needs it,
 		 * pageout will grab it eventually.
 		 */
-
 		if (result != KERN_SUCCESS) {
 			RELEASE_PAGE(m);
 			UNLOCK_AND_DEALLOCATE;
@@ -814,21 +775,17 @@ RetryCopy:
 
 	if (prot & VM_PROT_WRITE)
 		m->flags &= ~PG_COPYONWRITE;
-
 	/*
 	 * It's critically important that a wired-down page be faulted only
 	 * once in each map for which it is wired.
 	 */
-
 	vm_object_unlock(object);
-
 	/*
 	 * Put this page into the physical map. We had to do the unlock above
 	 * because pmap_enter may cause other faults.   We don't put the page
 	 * back on the active queue until later so that the page-out daemon
 	 * won't find us (yet).
 	 */
-
 	if (prot & VM_PROT_WRITE) {
 		m->flags |= PG_WRITEABLE;
 		m->object->flags |= OBJ_WRITEABLE;
@@ -849,7 +806,6 @@ RetryCopy:
 	if (change_wiring == 0 && wired == 0)
 		pmap_prefault(map->pmap, vaddr, entry, first_object);
 #endif
-
 	/*
 	 * If the page is not wired down, then put it where the pageout daemon
 	 * can find it.
@@ -874,16 +830,13 @@ RetryCopy:
 		}
 	}
 	vm_page_unlock_queues();
-
 	/*
 	 * Unlock everything, and return
 	 */
-
 	PAGE_WAKEUP(m);
 	UNLOCK_AND_DEALLOCATE;
 
 	return (KERN_SUCCESS);
-
 }
 
 /*

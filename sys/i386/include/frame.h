@@ -49,7 +49,6 @@
 /*
  * Exception/Trap Stack Frame
  */
-
 struct trapframe {
 	int	tf_es;
 	int	tf_ds;

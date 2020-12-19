@@ -161,20 +161,19 @@ IDTVEC(align)
 
 	SUPERALIGN_TEXT
 _alltraps:
-	pushal
+	pushal					/* push general regs */
 	pushl	%ds
-	pushl	%es
+	pushl	%es				/* push data selectors */
 alltraps_with_regs_pushed:
-	movl	$KDSEL,%eax
+	movl	$KDSEL,%eax		/* switch to kernel data selector */
 	movl	%ax,%ds
 	movl	%ax,%es
-	FAKE_MCOUNT(12*4(%esp))
+	FAKE_MCOUNT(12*4(%esp))	/* no-op */
 calltrap:
-	FAKE_MCOUNT(_btrap)			/* init "from" _btrap -> calltrap */
-	incl	_cnt+V_TRAP
-	orl	$SWI_AST_MASK,_cpl
-	call	_trap
-
+	FAKE_MCOUNT(_btrap)		/* init "from" _btrap -> calltrap */
+	incl	_cnt+V_TRAP		/* incr nb of vm traps */
+	orl	$SWI_AST_MASK,_cpl	/* something about cpu prio lvl */
+	call	_trap			/* jump to C trap() routine */
 	/*
 	 * There was no place to save the cpl so we have to recover it
 	 * indirectly.  For traps from user mode it was 0, and for traps

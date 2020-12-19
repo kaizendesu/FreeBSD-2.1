@@ -2352,11 +2352,9 @@ vm_map_lookup(var_map, vaddr, fault_type, out_entry,
 	register boolean_t su;
 
 RetryLookup:;
-
 	/*
 	 * Lookup the faulting address.
 	 */
-
 	vm_map_lock_read(map);
 
 #define	RETURN(why) \
@@ -2369,17 +2367,16 @@ RetryLookup:;
 	 * If the map has an interesting hint, try it before calling full
 	 * blown lookup routine.
 	 */
-
 	simple_lock(&map->hint_lock);
 	entry = map->hint;
 	simple_unlock(&map->hint_lock);
 
+	/* Assign out_entry in case hint is what we want */
 	*out_entry = entry;
 
 	if ((entry == &map->header) ||
 	    (vaddr < entry->start) || (vaddr >= entry->end)) {
 		vm_map_entry_t tmp_entry;
-
 		/*
 		 * Entry was either not a valid hint, or the vaddr was not
 		 * contained in the entry, so do a full lookup.
@@ -2393,7 +2390,6 @@ RetryLookup:;
 	/*
 	 * Handle submaps.
 	 */
-
 	if (entry->is_sub_map) {
 		vm_map_t old_map = map;
 
@@ -2404,16 +2400,13 @@ RetryLookup:;
 	/*
 	 * Check whether this task is allowed to have this page.
 	 */
-
 	prot = entry->protection;
 	if ((fault_type & (prot)) != fault_type)
 		RETURN(KERN_PROTECTION_FAILURE);
-
 	/*
 	 * If this page is not pageable, we have to get it for all possible
 	 * accesses.
 	 */
-
 	*wired = (entry->wired_count != 0);
 	if (*wired)
 		prot = fault_type = entry->protection;

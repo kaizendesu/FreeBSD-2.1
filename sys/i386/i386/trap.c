@@ -129,8 +129,11 @@ userret(p, frame, oticks)
 {
 	int sig, s;
 
+	/* Handle any sigs received during syscall/trap */
 	while ((sig = CURSIG(p)) != 0)
 		postsig(sig);
+
+	/* Assign default user prio */
 	p->p_priority = p->p_usrpri;
 	if (want_resched) {
 		/*
@@ -142,10 +145,16 @@ userret(p, frame, oticks)
 		 * our priority.
 		 */
 		s = splclock();
+
+		/* Place curproc on run queue */
 		setrunqueue(p);
 		p->p_stats->p_ru.ru_nivcsw++;
+
+		/* Call scheduler to switch procs */
 		mi_switch();
 		splx(s);
+
+		/* Handle any sigs received while proc wasnt running */
 		while ((sig = CURSIG(p)) != 0)
 			postsig(sig);
 	}
@@ -187,14 +196,19 @@ trap(frame)
 #ifdef DIAGNOSTIC
 	u_long eva;
 #endif
-
+	/* Trap nb pushed by TRAP() */
 	type = frame.tf_trapno;
+
+	/* Error value pushed by hw */
 	code = frame.tf_err;
 
 	if (ISPL(frame.tf_cs) == SEL_UPL) {
 		/* user trap */
 
+		/* Assign nb of statclock ticks in system mode */
 		sticks = p->p_sticks;
+
+		/* Add trap frame to machine-dependent field */
 		p->p_md.md_regs = (int *)&frame;
 
 		switch (type) {
@@ -454,7 +468,7 @@ out:
  * debugging code.
  */
 int
-trap_pfault(frame, usermode)
+trap_pfault(frame, usermode)	/* usermode = TRUE */
 	struct trapframe *frame;
 	int usermode;
 {
@@ -478,13 +492,13 @@ trap_pfault(frame, usermode)
 		vm_offset_t v;
 		vm_page_t ptepg;
 
+		/* Handle edge cases */
 		if (p == NULL ||
 		    (!usermode && va < VM_MAXUSER_ADDRESS &&
 		    (curpcb == NULL || curpcb->pcb_onfault == NULL))) {
 			trap_fatal(frame);
 			return (-1);
 		}
-
 		/*
 		 * This is a fault on non-kernel virtual memory.
 		 * vm is initialized above to NULL. If curproc is NULL
@@ -493,15 +507,12 @@ trap_pfault(frame, usermode)
 		vm = p->p_vmspace;
 		if (vm == NULL)
 			goto nogo;
-
 		map = &vm->vm_map;
-
 		/*
 		 * Keep swapout from messing with us during this
 		 *	critical time.
 		 */
 		++p->p_lock;
-
 		/*
 		 * Grow the stack if necessary
 		 */
@@ -513,10 +524,9 @@ trap_pfault(frame, usermode)
 				goto nogo;
 			}
 		}
-
 		/*
 		 * Check if page table is mapped, if not,
-		 *	fault it first
+		 * fault it first
 		 */
 		v = (vm_offset_t) vtopte(va);
 
@@ -538,7 +548,6 @@ trap_pfault(frame, usermode)
 		 */
 		if (usermode)
 			goto nogo;
-
 		/*
 		 * Since we know that kernel virtual address addresses
 		 * always have pte pages mapped, we just have to fault
@@ -579,7 +588,21 @@ trap_pfault(frame, usermode)
 	int eva;
 	struct proc *p = curproc;
 
+	/*
+	 * Obtain addr that caused the pg fault from
+	 * CR2 register.
+	 *
+	 * From /sys/i386/include/cpufunc.h
+	 *
+	 * rcr2(void) {
+	 * 		u_long	data;
+	 * __asm __volatile("movl %%cr2,%0" : "=r" (data));
+	 * return (data);
+	 * }
+	 */
 	eva = rcr2();
+
+	/* Pg align eva */
 	va = trunc_page((vm_offset_t)eva);
 
 	if (va >= KERNBASE) {
@@ -605,6 +628,7 @@ trap_pfault(frame, usermode)
 		map = &vm->vm_map;
 	}
 
+	/* Set type of pg fault */
 	if (frame->tf_err & PGEX_W)
 		ftype = VM_PROT_READ | VM_PROT_WRITE;
 	else
@@ -613,7 +637,6 @@ trap_pfault(frame, usermode)
 	if (map != kernel_map) {
 		vm_offset_t v;
 		vm_page_t ptepg;
-
 		/*
 		 * Keep swapout from messing with us during this
 		 *	critical time.
@@ -624,6 +647,7 @@ trap_pfault(frame, usermode)
 		 * Grow the stack if necessary
 		 */
 		if ((caddr_t)va > vm->vm_maxsaddr
+			/* (caddr_t)va < (caddr_t)VM_MAXUSER_ADDRESS */
 		    && (caddr_t)va < (caddr_t)USRSTACK) {
 			if (!grow(p, va)) {
 				rv = KERN_FAILURE;
@@ -631,22 +655,33 @@ trap_pfault(frame, usermode)
 				goto nogo;
 			}
 		}
-
 		/*
 		 * Check if page table is mapped, if not,
 		 *	fault it first
 		 */
-		v = (vm_offset_t) vtopte(va);
+		v = (vm_offset_t) vtopte(va);	/* v is va's pte */
 
-		/* Fault the pte only if needed: */
+		/* Fault the pte only if needed:
+		 * 
+		 * Why does dereferencing this not cause
+		 * a page fault? 
+		 */
 		if (*((int *)vtopte(v)) == 0)
 			(void) vm_fault(map, trunc_page(v), VM_PROT_WRITE, FALSE);
-
+		/*
+		 * Incr the ref count of the vm_page corresponding to
+		 * the page tbl pg containing va's pte.
+		 *
+		 * #define vm_map_pmap(map) ((map)->pmap)
+		 */ 
 		pmap_use_pt( vm_map_pmap(map), va);
 
 		/* Fault in the user page: */
 		rv = vm_fault(map, va, ftype, FALSE);
-
+		/*
+		 * Decr the ref count of the vm_page corresponding to
+		 * the page tbl pg eontaining va's pte.
+		 */
 		pmap_unuse_pt( vm_map_pmap(map), va);
 
 		--p->p_lock;
