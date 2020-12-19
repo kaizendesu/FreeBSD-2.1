@@ -13,7 +13,6 @@
 _alltraps
 	trap
 		trap_pfault
-			grow
 			vm_map_pmap
 			vm_fault
 				vm_map_lookup
@@ -21,11 +20,6 @@ _alltraps
 					vm_object_shadow
 				vnode_pager_lock
 				vm_page_lookup
-				tsleep
-					timeout
-					unsleep
-					mi_switch
-					untimeout
 				vm_page_unqueue
 				vm_page_activate
 				vm_pager_has_page
@@ -78,9 +72,6 @@ File: trap.c
 	trap_pfault					++-+
 	userret						++--
 
-File: vm_machdep.c
-	grow						----
-
 File: vm_fault.c
 	vm_fault					+---
 	vm_fault_additional_pages	+---
@@ -112,15 +103,6 @@ File: vm_page.c
 	vm_page_copy				++--
 	vm_page_wire				----
 	vm_page_unwire				----
-
-File: kern_synch.c
-	tsleep						----
-	unsleep						----
-	mi_switch					----
-
-File: kern_clock.c
-	timeout						----
-	untimeout					----
 
 File: vm_pager.c
 	vm_pager_has_page			++--
