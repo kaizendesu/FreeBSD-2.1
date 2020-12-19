@@ -2371,9 +2371,10 @@ RetryLookup:;
 	entry = map->hint;
 	simple_unlock(&map->hint_lock);
 
-	/* Assign out_entry in case hint is what we want */
+	/* Assign hint in case it's what we want */
 	*out_entry = entry;
 
+	/* Hint doesn't contain the vaddr */
 	if ((entry == &map->header) ||
 	    (vaddr < entry->start) || (vaddr >= entry->end)) {
 		vm_map_entry_t tmp_entry;
@@ -2401,6 +2402,10 @@ RetryLookup:;
 	 * Check whether this task is allowed to have this page.
 	 */
 	prot = entry->protection;
+	/*
+	 * fault_type must be a subset of prot, so the AND must
+	 * leave it unchanged.
+	 */
 	if ((fault_type & (prot)) != fault_type)
 		RETURN(KERN_PROTECTION_FAILURE);
 	/*
@@ -2409,14 +2414,21 @@ RetryLookup:;
 	 */
 	*wired = (entry->wired_count != 0);
 	if (*wired)
+		/* Potentially adds new protections */
 		prot = fault_type = entry->protection;
-
 	/*
 	 * If we don't already have a VM object, track it down.
+	 *
+	 * entry->is_a_map == 1: VM object is a share map
+	 *
+	 * entry->is_a_map == 0: VM object is an object 
 	 */
-
 	su = !entry->is_a_map;
 	if (su) {
+		/*
+		 * If the VM object is not a map, then it must be
+		 * a share map.
+		 */
 		share_map = map;
 		share_offset = vaddr;
 	} else {
@@ -2424,15 +2436,28 @@ RetryLookup:;
 
 		/*
 		 * Compute the sharing map, and offset into it.
+		 *
+		 * entry->object is a vm_map_object union given by:
+		 *
+		 * union vm_map_object {
+		 *		struct vm_object *vm_object;// object object
+		 *		struct vm_map *share_map	// share map
+		 *		struct vm_map *sub_map		// belongs to another map
+		 * }
+		 *
 		 */
-
 		share_map = entry->object.share_map;
+		/*
+		 * entry->offset is the offset into the vm map entry's
+		 * object.
+		 *
+		 * So to calculate the offset into the share map, we have
+		 * to add vaddr + entry->start to entry->offset.
+		 */
 		share_offset = (vaddr - entry->start) + entry->offset;
-
 		/*
 		 * Look for the backing store object and offset
 		 */
-
 		vm_map_lock_read(share_map);
 
 		if (!vm_map_lookup_entry(share_map, share_offset,
@@ -2442,11 +2467,9 @@ RetryLookup:;
 		}
 		entry = share_entry;
 	}
-
 	/*
 	 * If the entry was copy-on-write, we either ...
 	 */
-
 	if (entry->needs_copy) {
 		/*
 		 * If we want to write the page, we may as well handle that
@@ -2455,7 +2478,6 @@ RetryLookup:;
 		 * If we don't need to write the page, we just demote the
 		 * permissions allowed.
 		 */
-
 		if (fault_type & VM_PROT_WRITE) {
 			/*
 			 * Make a new object, and place it in the object
@@ -2463,7 +2485,6 @@ RetryLookup:;
 			 * -- one just moved from the share map to the new
 			 * object.
 			 */
-
 			if (lock_read_to_write(&share_map->lock)) {
 				if (share_map != map)
 					vm_map_unlock_read(map);
@@ -2482,7 +2503,6 @@ RetryLookup:;
 			 * We're attempting to read a copy-on-write page --
 			 * don't allow writes.
 			 */
-
 			prot &= (~VM_PROT_WRITE);
 		}
 	}
@@ -2505,14 +2525,11 @@ RetryLookup:;
 	 * Return the object/offset from this entry.  If the entry was
 	 * copy-on-write or empty, it has been fixed up.
 	 */
-
 	*offset = (share_offset - entry->start) + entry->offset;
 	*object = entry->object.vm_object;
-
 	/*
 	 * Return whether this is the only map sharing this data.
 	 */
-
 	if (!su) {
 		simple_lock(&share_map->ref_lock);
 		su = (share_map->ref_count == 1);

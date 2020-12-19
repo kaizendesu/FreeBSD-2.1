@@ -819,12 +819,21 @@ _swap_pager_haspage(swp, offset)
 	register sw_blk_t swb;
 	int ix;
 
+	/*   offset / (8 * 4096) */
 	ix = offset / (SWB_NPAGES * PAGE_SIZE);
+
+	/* ix is the swap blk containing the pg */
+
 	if (swp->sw_blocks == NULL || ix >= swp->sw_nblocks) {
 		return (FALSE);
 	}
+	/* Access swap blk containing the pg */
 	swb = &swp->sw_blocks[ix];
+
+	/* Convert ix to the pg's idx within swap blk */
 	ix = (offset % (SWB_NPAGES * PAGE_SIZE)) / PAGE_SIZE;
+
+	/* Return TRUE if the swp blk isn't empty */
 	if (swb->swb_block[ix] != SWB_EMPTY) {
 		if (swb->swb_valid & (1 << ix))
 			return TRUE;

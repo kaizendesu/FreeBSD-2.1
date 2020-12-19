@@ -981,10 +981,8 @@ vm_object_shadow(object, offset, length)
 	/*
 	 * Allocate a new object with the given length
 	 */
-
 	if ((result = vm_object_allocate(length)) == NULL)
 		panic("vm_object_shadow: no object for shadowing");
-
 	/*
 	 * The new object shadows the source object, adding a reference to it.
 	 * Our caller changes his reference to point to the new object,
@@ -994,18 +992,14 @@ vm_object_shadow(object, offset, length)
 	result->shadow = source;
 	if (source)
 		TAILQ_INSERT_TAIL(&result->shadow->reverse_shadow_head, result, reverse_shadow_list);
-
 	/*
 	 * Store the offset into the source object, and fix up the offset into
 	 * the new object.
 	 */
-
 	result->shadow_offset = *offset;
-
 	/*
 	 * Return the new things
 	 */
-
 	*offset = 0;
 	*object = result;
 }

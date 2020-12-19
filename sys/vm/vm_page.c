@@ -383,38 +383,33 @@ vm_page_insert(mem, object, offset)
 {
 	register struct pglist *bucket;
 
+	/* Checks that the page is within the vm_page_array
+	 * and that the page flags are not invalid.
+	 */
 	VM_PAGE_CHECK(mem);
 
 	if (mem->flags & PG_TABLED)
 		panic("vm_page_insert: already inserted");
-
 	/*
 	 * Record the object/offset pair in this page
 	 */
-
 	mem->object = object;
 	mem->offset = offset;
-
 	/*
 	 * Insert it into the object_object/offset hash table
 	 */
-
 	bucket = &vm_page_buckets[vm_page_hash(object, offset)];
 	simple_lock(&bucket_lock);
 	TAILQ_INSERT_TAIL(bucket, mem, hashq);
 	simple_unlock(&bucket_lock);
-
 	/*
 	 * Now link into the object's list of backed pages.
 	 */
-
 	TAILQ_INSERT_TAIL(&object->memq, mem, listq);
 	mem->flags |= PG_TABLED;
-
 	/*
 	 * And show that the object has one more resident page.
 	 */
-
 	object->resident_page_count++;
 }
 

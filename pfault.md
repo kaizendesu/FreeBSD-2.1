@@ -19,7 +19,8 @@ _alltraps
 				vm_map_lookup
 					vm_map_lookup_entry
 					vm_object_shadow
-				vm_page_lookup	
+				vnode_pager_lock
+				vm_page_lookup
 				tsleep
 					timeout
 					unsleep
@@ -27,11 +28,13 @@ _alltraps
 					untimeout
 				vm_page_unqueue
 				vm_page_activate
+				vm_pager_has_page
+					swap_pager_haspage
+					_swap_pager_hashpage
 				vm_page_alloc
 					vm_page_remove
 					vm_page_insert
 				vm_fault_additional_pages
-					vm_pager_has_page
 					vm_fault_page_lookup
 				vm_pager_get_pages
 					vm_page_free
@@ -77,20 +80,23 @@ File: vm_fault.c
 
 File: vm_map.c
 	vm_map_lookup				++--
-	vm_map_lookup_entry			----
+	vm_map_lookup_entry			++--
 
 File: vm_object.c
-	vm_object_shadow			----
+	vm_object_shadow			++--
 	vm_object_collapse			----
 
+File: vnode_pager.c
+	vnode_pager_lock			++--
+
 File: vm_page.c
-	vm_page_lookup				----
-	vm_page_alloc				----
-	vm_page_remove				----
-	vm_page_insert				----
-	vm_page_unqueue				----
+	vm_page_lookup				++--
+	vm_page_alloc				++--
+	vm_page_remove				++--
+	vm_page_insert				++--
+	vm_page_unqueue				++--
 	vm_page_activate			----
-	vm_page_alloc				----
+	vm_page_alloc				++--
 	vm_page_free				----
 	vm_page_zero_fill			----
 	vm_page_copy				----
@@ -107,8 +113,12 @@ File: kern_clock.c
 	untimeout					----
 
 File: vm_pager.c
-	vm_pager_has_page			----
+	vm_pager_has_page			++--
 	vm_pager_get_pages			----
+
+File: swap_pager.c
+	swap_pager_haspage			++--
+	_swap_pager_haspage			++--
 
 File: pmap.c
 	pmap_zero_page				----
@@ -152,6 +162,8 @@ struct trapframe {
 ### *proc* Structure
 
 ```c
+/* From /sys/sys/proc.h */
+
 /*
  * Description of a process.
  *
@@ -255,6 +267,142 @@ struct	proc {
 };
 ```
 
+### *vm\_map\_entry* Structure
+
+```c
+/* From /sys/vm/vm_map.h */
+
+/*
+ *	Objects which live in maps may be either VM objects, or
+ *	another map (called a "sharing map") which denotes read-write
+ *	sharing with other maps.
+ */
+
+union vm_map_object {
+	struct vm_object *vm_object;	/* object object */
+	struct vm_map *share_map;		/* share map */
+	struct vm_map *sub_map;			/* belongs to another map */
+};
+
+/*
+ *	Address map entries consist of start and end addresses,
+ *	a VM object (or sharing map) and offset into that object,
+ *	and user-exported inheritance and protection information.
+ *	Also included is control information for virtual copy operations.
+ */
+struct vm_map_entry {
+	struct vm_map_entry *prev;	/* previous entry */
+	struct vm_map_entry *next;	/* next entry */
+	vm_offset_t start;			/* start address */
+	vm_offset_t end;			/* end address */
+	union vm_map_object object;	/* object I point to */
+	vm_offset_t offset;			/* offset into object */
+	boolean_t is_a_map:1,		/* Is "object" a map? */
+	 is_sub_map:1,				/* Is "object" a submap? */
+	/* Only in sharing maps: */
+	 copy_on_write:1,			/* is data copy-on-write */
+	 needs_copy:1;				/* does object need to be copied */
+	/* Only in task maps: */
+	vm_prot_t protection;		/* protection code */
+	vm_prot_t max_protection;	/* maximum protection */
+	vm_inherit_t inheritance;	/* inheritance */
+	int wired_count;			/* can be paged if = 0 */
+};
+```
+
+### *vm\_object* Structure
+
+```c
+/* From /sys/vm/vm_object.h */
+
+struct vm_object {
+	struct pglist memq;		/* Resident memory */
+	TAILQ_HEAD(rslist, vm_object) reverse_shadow_head; /* objects that this is a shadow for */
+	TAILQ_ENTRY(vm_object) object_list; /* list of all objects */
+	TAILQ_ENTRY(vm_object) reverse_shadow_list; /* chain of objects that are shadowed */
+	TAILQ_ENTRY(vm_object) cached_list; /* for persistence */
+	vm_size_t size;			/* Object size */
+	int ref_count;			/* How many refs?? */
+	u_short flags;			/* see below */
+	u_short paging_in_progress;	/* Paging (in or out) so don't collapse or destroy */
+	int resident_page_count;	/* number of resident pages */
+	vm_pager_t pager;		/* Where to get data */
+	vm_offset_t paging_offset;	/* Offset into paging space */
+	struct vm_object *shadow;	/* My shadow */
+	vm_offset_t shadow_offset;	/* Offset in shadow */
+	struct vm_object *copy;		/* Object that holds copies of my changed pages */
+	vm_offset_t last_read;		/* last read in object -- detect seq behavior */
+};
+```
+
+### *vm_page* Structure
+
+```c
+/*
+ *	Management of resident (logical) pages.
+ *
+ *	A small structure is kept for each resident
+ *	page, indexed by page number.  Each structure
+ *	is an element of several lists:
+ *
+ *		A hash table bucket used to quickly
+ *		perform object/offset lookups
+ *
+ *		A list of all pages for a given object,
+ *		so they can be quickly deactivated at
+ *		time of deallocation.
+ *
+ *		An ordered list of pages due for pageout.
+ *
+ *	In addition, the structure contains the object
+ *	and offset to which this page belongs (for pageout),
+ *	and sundry status bits.
+ *
+ *	Fields in this structure are locked either by the lock on the
+ *	object that the page belongs to (O) or by the lock on the page
+ *	queues (P).
+ */
+
+TAILQ_HEAD(pglist, vm_page);
+
+struct vm_page {
+	TAILQ_ENTRY(vm_page) pageq;	/* queue info for FIFO queue or free list (P) */
+	TAILQ_ENTRY(vm_page) hashq;	/* hash table links (O) */
+	TAILQ_ENTRY(vm_page) listq;	/* pages in same object (O) */
+
+	vm_object_t object;		/* which object am I in (O,P) */
+	vm_offset_t offset;		/* offset into object (O,P) */
+	vm_offset_t phys_addr;		/* physical address of page */
+
+	u_short wire_count;		/* wired down maps refs (P) */
+	u_short flags;			/* see below */
+	short hold_count;		/* page hold count */
+	u_short act_count;		/* page usage count */
+	u_short bmapped;		/* number of buffers mapped */
+	u_short busy;			/* page busy count */
+	u_short valid;			/* map of valid DEV_BSIZE chunks */
+	u_short dirty;			/* map of dirty DEV_BSIZE chunks */
+};
+
+/*
+ * These are the flags defined for vm_page.
+ *
+ * Note: PG_FILLED and PG_DIRTY are added for the filesystems.
+ */
+#define	PG_INACTIVE	0x0001		/* page is in inactive list (P) */
+#define	PG_ACTIVE	0x0002		/* page is in active list (P) */
+#define	PG_BUSY		0x0010		/* page is in transit (O) */
+#define	PG_WANTED	0x0020		/* someone is waiting for page (O) */
+#define	PG_TABLED	0x0040		/* page is in VP table (O) */
+#define	PG_COPYONWRITE	0x0080		/* must copy page before changing (O) */
+#define	PG_FICTITIOUS	0x0100		/* physical page doesn't exist (O) */
+#define	PG_WRITEABLE	0x0200		/* page is mapped writeable */
+#define PG_MAPPED	0x0400		/* page is mapped */
+#define PG_REFERENCED	0x1000		/* page has been referenced */
+#define	PG_CACHE	0x4000		/* On VMIO cache */
+#define	PG_FREE		0x8000		/* page is in free list */
+```
+
 ## Code Walkthrough
 
 ### Pseudo Code Descriptions
@@ -263,21 +411,65 @@ struct	proc {
 
 **trap**:
 
-**trap\_pfault**:
+**trap_pfault**:
 
 **grow**:
 
-**vm\_map\_pmap**:
+**vm_map_pmap**:
 
-**vm\_fault**:
+**vm_fault**:
 
-**vm\_map\_lookup**:
+1. Calls vm\_map\_lookup to obtain the backing store object and offset of the faulting virtual address.
+2. Locks the first object and obtains a pointer to its vnode by calling vnode\_pager\_lock.
+3. Locks the first object, increments its ref count, and increments paging\_in\_progress.
+4. While Loop: Searches for the page by calling vm\_page\_lookup with its object/offset pair.
+	* Found Hashed Page: Checks the pg's flag for PG\_BUSY and the page's busy count, calling tsleep if they are set.
+	* Found Hashed Page: Calls vm\_page\_unqueue so that the pageout daemon cannot tamper with it
+	* Found Hashed Page: Calls vm\_page\_activate if the pg is cached and there is not enough free and cached pgs, and then calls VM\_WAIT before restarting the loop. 
+	* Found Hashed Page: Sets PG\_BUSY and jumps to readrest if there are any invalid disk blks in the pg.
+	* Found Hashed page: Breaks out of the while loop.
+5. While Loop: Calls vm\_pager\_has\_page if the object's pager is a swap pager and the swap space is not full.
+6. While Loop: Calls vm\_page\_alloc to allocate a page in the current object and set it to PG\_BUSY.
+7. While Loop: If the object has a vnode/swap pager and we are not changing the page's wiring it...
+	* Unlocks the object
+	* Calls vm\_fault\_additional\_pages and vm\_pager\_get\_pages 
 
-**vm\_map\_lookup\_entry**:
+**vm_map_lookup**:
 
-**vm\_object\_shadow**:
+1. Locks the vm map.
+2. Checks if the vm map's hint contains the vaddr, and if it doesn't it calls vm\_map\_lookup\_entry to obtain the preceding entry.
+3. If the entry is a submap, sets map to the submap, frees the old map, and restarts the search.
+4. Checks if the fault type matches the protections on the entry, returning KERN\_PROTECTION\_FAILURE if fault type is not a subset of them.
+5. Checks if the entry's VM object is actually a share map, assigning share\_map and calculating share\_offset if it is and calling vm\_map\_lookup\_entry to search for the backing object. Otherwise, share\_map and share\_offset are map and vaddr respectively.
+6. Creates a shadow object for writing pg faults by calling vm\_object\_shadow and assigning entry-\>needs\_copy to FALSE. Otherwise, clear VM\_PROT\_WRITE from prot to prevent future writes.
+7. Creates the map entry's object if it is NULL.
+8. Assigns the final offset, object, and protections to the IN/OUT arguments offset, object, and prot respectively.
+9. Returns KERN\_SUCCESS.
 
-**vm\_page\_lookup:
+**vm_map_lookup_entry**:
+
+1. Locks the vm map's hint and assigns the hint to cur.
+2. Sets cur to cur-\>next if the hint is &map-\>header (unassigned hint). 
+3. Checks if the cur entry precedes the address, setting \(entry = cur and returning TRUE if it does. 
+4. Linearly searches from the hint to the end of the map if the address we are searching is >= cur-\>start and searches from the beginning of the map to the hint otherwise.
+5. Saves the current entry as the hint When cur-\>start <= address < cur-\>end, assigns \(entry = cur and returns TRUE.
+6. If cur-\>end > address, assigns \*entry = cur-\>prev, saves the previous entry as the hint, and returns FALSE.
+
+**vm_object_shadow**:
+
+1. Allocates a new object by passing length arg to vm\_object\_allocate.
+2. Sets the source object as the backing object of the new object by assigning result-\>shadow = source.
+3. Sets the new object's offset into its backing object as the offset arg.
+4. Updates the IN/OUT args offset and object with 0 and the new object respectively.
+
+**vnode_pager_lock**:
+
+1. Searches through the chain of shadow objects until it finds an entry with a non-NULL vnode pager.
+2. Retrieves the vnode pager pointer from the object-\>pager-\>pg\_data.
+3. Calls VOP\_LOCK to lock the vnode pager.
+4. Returns the vnode pointer from the vnode pager.
+
+**vm_page_lookup:** Looks up the object/offset pair in the vm\_page\_hash table, checks whether this entry is valid, and returns the vm\_page if its entry and offset matches the one used to find it in the hash table.
 
 **tsleep**:
 
@@ -285,49 +477,77 @@ struct	proc {
 
 **unsleep**:
 
-**mi\_switch**:
+**mi_switch**:
 
 **untimeout**:
 
-**vm\_page\_unqueue**:
+**vm_page_unqueue**: Removes the pg from the page queue specified by the mem-\>flags field and decrements that queue's count.
 
-**vm\_page\_activate**:
+**vm_page_activate**:
 
-**vm\_page\_alloc**:
+**vm_pager_has_page**: Checks if the pager is NULL before calling accessing its pg\_ops to call the appropriate \(\_haspage operation.
 
-**vm\_page\_remove**;
+**swap_pager_haspage**: Calls \_swap\_pager\_haspage by passing pager-\>pg\+data and returns its return value.
 
-**vm\_page\_insert**:
+\_**swap_pager_haspage**: Uses 2D row/col arithmetic to determine whether the swap blk for the pg's offset is empty or not, returning TRUE if this region is not empty.
 
-**vm\_fault\_additional\_pages**:
+**vm_page_alloc**:
 
-**vm\_pager\_has\_page**:
+1. Upgrades the allocation class for the page daemon if it isn't VM\_ALLOC\_INTERRUPT.
+2. Locks the free page queue.
+3. Switches on the allocation class, determing whether there is enough pgs in each pg queue to allocate the request.
+	* VM\_ALLOC\+NORMAL takes a pg from the free pg queue if free\_count > free\_reserved, otherwise it tries to take the LRU pg from the pg cache
+	* VM\_ALLOC\_SYSTEM takes a pg from the free pg queue if the free\_count >= interrupt free min and either free\_count >= free\_reserved or cache\_count == 0. Otherwise, tries to take the LRU pg from the pg cache.
+	* VM\_ALLOC\_INTERRUPT takes pgs from the free pg queue until its all gone
+	* Calls pagedaemon\_wakeup if any of these switch cases fail to obtain a pg.
+4. Unlocks the free pg queue.
+5. Sets PG\_BUSY and all other fields to 0.
+6. Calls vm\_page\_insert to insert the pg into the object.
+7. Calls pagedaemon\_wakeup if free\_count + cache\_count < free\_min or free\_count < pageout\_free\_min.
+8. Returns the pg. 
 
-**vm\_fault\_page\_lookup**:
+**vm_page_remove**;
 
-**vm\_pager\_get\_pages**:
+1. Returns early if PG\_TABLED is not set.
+2. Locks the vm\_page\_hash table, removes the page from it, and unlocks the table.
+3. Removes the page from the object's pg queue.
+4. Decrements the resident\_page\_count and clears PG\_TABLED.
 
-**vm\_page\_free**:
+**vm_page_insert**:
 
-**vm\_page\_zero\_fill**:
+1. Checks that the pg is within the vm\_page\_array and that its flags are not invalid.
+2. Sets the page's object and offset to the object and offset args passed to the function.
+3. Locks the vm\_page\_buckets hash table, inserts the page, and unlocks the table.
+4. Inserts the pg at the tail of the object's pg queue.
+5. Sets PG\_TABLED and increments resident\_page\_count.  
 
-**pmap\_zero\_page**:
+**vm_fault_additional_pages**:
 
-**vm\_page\_copy**:
+**vm_fault_page_lookup**:
 
-**pmap\_copy\_page**:
+**vm_pager_get_pages**:
 
-**vm\_object\_collapse**:
+**vm_page_free**:
 
-**pmap\_enter**:
+**vm_page_zero_fill**:
 
-**vm\_page\_wire**:
+**pmap_zero_page**:
 
-**vm\_page\_unwire**:
+**vm_page_copy**:
 
-**pmap\_use\_pt**:
+**pmap_copy_page**:
 
-**pmap\_unuse\_pt**:
+**vm_object_collapse**:
+
+**pmap_enter**:
+
+**vm_page_wire**:
+
+**vm_page_unwire**:
+
+**pmap_use_pt**:
+
+**pmap_unuse_pt**:
 
 **userret**:
 

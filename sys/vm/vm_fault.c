@@ -224,7 +224,7 @@ RetryFault:;
 	 * Note that we cannot hold any locks during the pager access or when
 	 * waiting for memory, so we use a busy page then.
 	 *
-	 * Note also that we aren't as concerned about more than one thead
+	 * Note also that we aren't as concerned about more than one thread
 	 * attempting to pager_data_unlock the same page at once, so we don't
 	 * hold the page as busy then, but do record the highest unlock value
 	 * so far.  [Unlock requests may also be delivered out of order.]
@@ -251,6 +251,7 @@ RetryFault:;
 	 * See whether this page is resident
 	 */
 	while (TRUE) {
+		/* Looks up the object/offset pair in the vm_page_hash table */
 		m = vm_page_lookup(object, offset);
 		if (m != NULL) {
 			int flags;
@@ -272,10 +273,12 @@ RetryFault:;
 				vm_object_deallocate(first_object);
 				goto RetryFault;
 			}
-
 			flags = m->flags;
 			vm_page_unqueue(m);
-
+			/*
+			 * If pg is cached and there are too few cached/free pgs,
+			 * we activate the pg, wait for a bit, then retry.
+			 */
 			if ((flags & PG_CACHE) &&
 			    (cnt.v_free_count + cnt.v_cache_count) < cnt.v_free_reserved) {
 				vm_page_activate(m);
@@ -287,6 +290,8 @@ RetryFault:;
 			 * Mark page busy for other threads, and the pagedaemon.
 			 */
 			m->flags |= PG_BUSY;
+
+			/* If the pg has invalid disk blks, fill them in at readrest */
 			if (m->valid && ((m->valid & VM_PAGE_BITS_ALL) != VM_PAGE_BITS_ALL) &&
 				 m->object != kernel_object && m->object != kmem_object) {
 				goto readrest;
@@ -300,8 +305,11 @@ RetryFault:;
 				UNLOCK_AND_DEALLOCATE;
 				return (KERN_PROTECTION_FAILURE);
 			}
+			/* Free swap space, no shadow objs, and pager ==  NULL ... */
 			if (swap_pager_full && !object->shadow && (!object->pager ||
+				/* ... or the pager exists, its a swap pager, and ... */
 				(object->pager && object->pager->pg_type == PG_SWAP &&
+					/* ... pager wrote the page to swap space */
 				    !vm_pager_has_page(object->pager, offset + object->paging_offset)))) {
 				if (vaddr < VM_MAXUSER_ADDRESS && curproc && curproc->p_pid >= 48) {	/* XXX */
 					printf("Process %lu killed by vm_fault -- out of swap\n", (u_long) curproc->p_pid);

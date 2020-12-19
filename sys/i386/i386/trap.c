@@ -663,8 +663,12 @@ trap_pfault(frame, usermode)
 
 		/* Fault the pte only if needed:
 		 * 
-		 * Why does dereferencing this not cause
-		 * a page fault? 
+		 * The pte of a pte is a pde, which will always be
+		 * in-core because the pmap can acces it with pm_pgdir.
+		 *
+		 * Hence, we can dereference the pte of v, which is
+		 * nothing but a pde, and examine its value to
+		 * determine whether it points to a page tbl pg or not.
 		 */
 		if (*((int *)vtopte(v)) == 0)
 			(void) vm_fault(map, trunc_page(v), VM_PROT_WRITE, FALSE);
