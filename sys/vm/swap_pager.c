@@ -961,7 +961,6 @@ swap_pager_input(swp, m, count, reqpage)
 		return (VM_PAGER_FAIL);
 	}
 	reqdskregion = reqaddr[reqpage] / dmmax;
-
 	/*
 	 * search backwards for the first contiguous page to transfer
 	 */
@@ -1006,14 +1005,12 @@ swap_pager_input(swp, m, count, reqpage)
 		reqpage -= first;
 	}
 	++swb[reqpage]->swb_locked;
-
 	/*
 	 * at this point: "m" is a pointer to the array of vm_page_t for
 	 * paging I/O "count" is the number of vm_page_t entries represented
 	 * by "m" "object" is the vm_object_t for I/O "reqpage" is the index
 	 * into "m" for the page actually faulted
 	 */
-
 	spc = NULL;	/* we might not use an spc data structure */
 
 	if ((count == 1) && (swap_pager_free.tqh_first != NULL)) {
@@ -1065,7 +1062,6 @@ swap_pager_input(swp, m, count, reqpage)
 		bp = getpbuf();
 		kva = (vm_offset_t) bp->b_data;
 	}
-
 	/*
 	 * map our page(s) into kva for input
 	 */
@@ -1090,7 +1086,6 @@ swap_pager_input(swp, m, count, reqpage)
 	 * perform the I/O
 	 */
 	VOP_STRATEGY(bp);
-
 	/*
 	 * wait for the sync I/O to complete
 	 */
@@ -1106,7 +1101,6 @@ swap_pager_input(swp, m, count, reqpage)
 	} else {
 		rv = VM_PAGER_OK;
 	}
-
 	/*
 	 * relpbuf does this, but we maintain our own buffer list also...
 	 */
@@ -1115,7 +1109,6 @@ swap_pager_input(swp, m, count, reqpage)
 
 	splx(s);
 	--swb[reqpage]->swb_locked;
-
 	/*
 	 * remove the mapping for kernel virtual
 	 */
