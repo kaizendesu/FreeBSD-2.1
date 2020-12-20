@@ -286,7 +286,10 @@ vm_pager_map_page(m)
 {
 	vm_offset_t kva;
 
+	/* Acquire free pg from pager's sub map */
 	kva = kmem_alloc_wait(pager_map, PAGE_SIZE);
+
+	/* Insert the pg into the kva */
 	pmap_kenter(kva, VM_PAGE_TO_PHYS(m));
 	return (kva);
 }

@@ -1392,13 +1392,22 @@ pmap_kenter(va, pa)
 	register pt_entry_t *pte;
 	int wasvalid = 0;
 
+	/* Obtain va's pte */
 	pte = vtopte(va);
-
+	/*
+	 * Since we are mapping into the kva, we can bet
+	 * on the page tbl pg containing the pte to exist
+	 * and be in-core. This means we can dereference
+	 * the pte without page faulting to see if the
+	 * pte is already mapped.
+	 */
 	if (*pte)
 		wasvalid++;
 
+	/* Set the pte to map to pa */
 	*pte = (pt_entry_t) ((int) (pa | PG_RW | PG_V | PG_W));
 
+	/* Flush the TLB if the pte was previously mapped */
 	if (wasvalid)
 		pmap_update();
 }

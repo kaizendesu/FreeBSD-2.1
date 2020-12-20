@@ -1713,6 +1713,8 @@ ufs_strategy(ap)
 	ip = VTOI(vp);
 	if (vp->v_type == VBLK || vp->v_type == VCHR)
 		panic("ufs_strategy: spec");
+
+	/* Find the physical blk nb if not done already */
 	if (bp->b_blkno == bp->b_lblkno) {
 		error = VOP_BMAP(vp, bp->b_lblkno, NULL, &bp->b_blkno, NULL);
 		if (error) {
@@ -1724,12 +1726,15 @@ ufs_strategy(ap)
 		if ((long)bp->b_blkno == -1)
 			vfs_bio_clrbuf(bp);
 	}
+	/* If blkno is -1 we set the io as done and return */
 	if ((long)bp->b_blkno == -1) {
 		biodone(bp);
 		return (0);
 	}
 	vp = ip->i_devvp;
 	bp->b_dev = vp->v_rdev;
+
+	/* ((*((vp->v_op)[VOFFSET(vop_strategy)]))(ap)) */
 	VOCALL (vp->v_op, VOFFSET(vop_strategy), ap);
 	return (0);
 }

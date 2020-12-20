@@ -493,23 +493,31 @@ vnode_pager_addr(vp, address, run)
 	if ((int) address < 0)
 		return -1;
 
+	/* bsize = 2048 */
 	bsize = vp->v_mount->mnt_stat.f_iosize;
+	/*
+	 * Use 2D arithmetic to calculate logical block and offset
+	 * from the address argument. 
+	 */
 	vblock = address / bsize;
 	voffset = address % bsize;
-
+	/*
+	 * Converts the logical block and offset to the actual
+	 * disk block and offset.
+	 */
 	err = VOP_BMAP(vp, vblock, &rtvp, &block, run);
 
 	if (err || (block == -1))
 		rtaddress = -1;
 	else {
+		/* physical blk nb + voffset in 512 byte units */
 		rtaddress = block + voffset / DEV_BSIZE;
-		if( run) {
+		if (run) {
 			*run += 1;
 			*run *= bsize/PAGE_SIZE;
 			*run -= voffset/PAGE_SIZE;
 		}
 	}
-
 	return rtaddress;
 }
 
@@ -544,7 +552,6 @@ vnode_pager_input_smlfs(vnp, m)
 
 	vp = vnp->vnp_vp;
 	bsize = vp->v_mount->mnt_stat.f_iosize;
-
 
 	VOP_BMAP(vp, 0, &dp, 0, 0);
 
@@ -608,9 +615,7 @@ nextblock:
 		return VM_PAGER_ERROR;
 	}
 	return VM_PAGER_OK;
-
 }
-
 
 /*
  * old style vnode pager output routine
@@ -637,13 +642,13 @@ vnode_pager_input_old(vnp, m)
 		size = PAGE_SIZE;
 		if (m->offset + size > vnp->vnp_size)
 			size = vnp->vnp_size - m->offset;
-
 		/*
 		 * Allocate a kernel virtual address and initialize so that
 		 * we can use VOP_READ/WRITE routines.
 		 */
 		kva = vm_pager_map_page(m);
 
+		/* Set up uio/iovec structures for ffs_read */
 		aiov.iov_base = (caddr_t) kva;
 		aiov.iov_len = size;
 		auio.uio_iov = &aiov;
@@ -654,6 +659,7 @@ vnode_pager_input_old(vnp, m)
 		auio.uio_resid = size;
 		auio.uio_procp = (struct proc *) 0;
 
+		/* Calls ffs_read, which is called READ in ufs_readwrite.c */
 		error = VOP_READ(vnp->vnp_vp, &auio, 0, curproc->p_ucred);
 		if (!error) {
 			register int count = size - auio.uio_resid;
@@ -663,6 +669,7 @@ vnode_pager_input_old(vnp, m)
 			else if (count != PAGE_SIZE)
 				bzero((caddr_t) kva + count, PAGE_SIZE - count);
 		}
+		/* Unmaps the page from kernel virtual address space */
 		vm_pager_unmap_page(kva);
 	}
 	pmap_clear_modify(VM_PAGE_TO_PHYS(m));
@@ -702,6 +709,8 @@ vnode_pager_input(vnp, m, count, reqpage)
 					 * object */
 
 	vp = vnp->vnp_vp;
+
+	/* #define BLKDEV_IOSIZE 2048 */
 	bsize = vp->v_mount->mnt_stat.f_iosize;
 
 	/* get the UNDERLYING device for the file with VOP_BMAP() */
@@ -714,6 +723,9 @@ vnode_pager_input(vnp, m, count, reqpage)
 
 	/*
 	 * if we can't bmap, use old VOP code
+	 *
+	 * ufs_bmap will return zero upon checking if the 4th
+	 * argument is NULL. Hence, we always use the old code.
 	 */
 	if (VOP_BMAP(vp, 0, &dp, 0, 0)) {
 		for (i = 0; i < count; i++) {
@@ -724,7 +736,6 @@ vnode_pager_input(vnp, m, count, reqpage)
 		cnt.v_vnodein++;
 		cnt.v_vnodepgsin++;
 		return vnode_pager_input_old(vnp, m[reqpage]);
-
 		/*
 		 * if the blocksize is smaller than a page size, then use
 		 * special small filesystem code.  NFS sometimes has a small

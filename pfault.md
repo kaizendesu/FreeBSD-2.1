@@ -27,7 +27,6 @@ _alltraps
 					_swap_pager_haspage
 					vnode_pager_haspage
 						incore
-						ufs_bmap
 				vm_page_alloc
 					vm_page_remove
 					vm_page_insert
@@ -38,6 +37,17 @@ _alltraps
 					swap_pager_getpage
 					vnode_pager_getpage
 						vnode_pager_input
+							vnode_pager_freepage
+							vnode_pager_input_smlfs
+								vm_pager_map_page
+									kmem_alloc_wait
+									pmap_kenter
+								vm_page_bits
+								vnode_pager_addr
+									ufs_bmap
+								ufs_strategy
+									wdstrategy
+								vm_pager_unmap_page
 				vm_page_zero_fill
 					pmap_zero_page
 						pmap_update
@@ -88,7 +98,9 @@ File: vm_object.c
 File: vnode_pager.c
 	vnode_pager_lock			++--
 	vnode_pager_getpage			++--
-	vnode_pager_input			----
+	vnode_pager_input			++--
+	vnode_pager_freepage		++--
+	vnode_pager_addr			++--
 
 File: vm_page.c
 	vm_page_lookup				++--
@@ -101,12 +113,15 @@ File: vm_page.c
 	vm_page_free				++--
 	vm_page_zero_fill			++--
 	vm_page_copy				++--
+	vm_page_bits				+---
 	vm_page_wire				----
 	vm_page_unwire				----
 
 File: vm_pager.c
 	vm_pager_has_page			++--
 	vm_pager_get_pages			++--
+	vm_pager_map_page			++--
+	vm_pager_unmap_page			++--
 
 File: swap_pager.c
 	swap_pager_haspage			++--
@@ -117,12 +132,22 @@ File: swap_pager.c
 File: vfs_bio.c
 	incore						++--
 
+File: vm_kern.c
+	kmem_alloc_wait				++--
+
 File: ufs_bmap.c
-	ufs_bmap					----
+	ufs_bmap					+---
+
+File: ufs_vnops
+	ufs_strategy				++--
+
+File: wd.c
+	wdstrategy					----
 
 File: pmap.c
 	pmap_zero_page				++--
 	pmap_copy_page				++--
+	pmap_kenter					++--
 	pmap_enter					----
 	pmap_use_pt					++--
 	pmap_unuse_pt				----
@@ -513,16 +538,6 @@ struct pagerops {
 
 **vm_page_lookup:** Looks up the object/offset pair in the vm\_page\_hash table, checks whether this entry is valid, and returns the vm\_page if its entry and offset matches the one used to find it in the hash table.
 
-**tsleep**:
-
-**timeout**:
-
-**unsleep**:
-
-**mi_switch**:
-
-**untimeout**:
-
 **vm_page_unqueue**: Removes the pg from the page queue specified by the mem-\>flags field and decrements that queue's count.
 
 **vm_page_activate**:
@@ -585,6 +600,49 @@ struct pagerops {
 
 **vnode_pager_input**:
 
+1. Calls vnode\_pager\_freepage on every pg in the marray that isn't the required page.
+2. Increments vnodein and vnodepgsin.
+3. Calls vnode\_pager\_input\_smlfs and returns. 
+
+**vnode_pager_freepage**: Clears PG\_BUSY, wakes up any processes sleeping on the page, and calls vm\_page\_free.
+
+**vnode_pager_input_smlfs**:
+
+1. Calls vm\_pager\_map\_page to allocate a free page of memory, map it into the kernel va space, and obtain its kva.
+2. For each file system blk in the file:
+	* Calls vm\_page\_bits to check if that block of the page is valid. If the block is valid, we continue.
+	* Calls vnode\_pager\_addr to obtain the file addr of the filesystem block.
+	* Calls ufs\_strategy.
+
+**vm_pager_map_page**: Calls kmem\_alloc\_wait to allocate a free page from the pager's submap, calls pmap\_kenter to insert the pg into the kva space, and returns the va of the page.
+
+**kmem_alloc_wait**:
+
+1. Rounds the allocation size to the nearest page
+2. For Loop: Calls vm\_map\_findspace to search for space in the map, breaks if it is successful, inserts the allocation with vm\_map\_insert, and returns the address of the allocation.
+3. For Loop: If it fails to find space in the map, it checks to see if the map will ever have enough space using vm\_map\_max/min, and if the map is too small for the allocation it returns 0.
+4. For Loop: Unlocks the map and tsleep's until new memory is available int he submap and loops.
+
+**vm_page_bits**: Returns the valid bit for a given disk block in a physical page.
+
+**vnode_pager_addr**:
+
+1. Calculates the logical blk nb and logical offset from the address arg.
+2. Calls ufs\_bmap to convert the logical blk nb to the physical disk blk nb.
+3. Assigns rtaddress to the physical disk blk nb plus the logical offset in 512 byte units.
+4. Returns rtaddress.
+
+**ufs_bmap**:
+
+**ufs_strategy**:
+
+1. Obtains the inode from the buf arg's vnode to ensure the vnode type is not VBLK or VCHR.
+2. Calls ufs\_bmap to calculate the physical blk nb if b\_blkno == b\_lblkno.
+3. Calls vop\_strategy from the vnode's vnodeops structure.
+4. Returns 0.
+
+**vm_pager_unmap_page**:
+
 **vm_page_free**:
 
 1. Calls vm\_page\_remove to remove the pg from the vm\_page\_hash table, remove it from the object's memq, decrements resident\_page\_count, and clears PG\_TABLED.
@@ -606,6 +664,8 @@ struct pagerops {
 **pmap_copy_page**: Checks if CMAP1 and CMAP2 are busy, assigns the pte of the source page to CMAP1 and the pte of the destination page to CMAP2, and calls either memcpy or bcopy to copy the pages, invalidates the ptes at CMAP1 and CMAP2, and calls pmap\_update.
 
 **pmap_update**: Flushes the TLB by reloading the CR3 register.
+
+**pmap_kenter**: Obtains the kernel va's pte, increments wasvalid if it is already mapped, sets the pte to point to pa, and calls pmap\_update to flush the TLB if wasvalid is set.
 
 **vm_object_collapse**:
 
