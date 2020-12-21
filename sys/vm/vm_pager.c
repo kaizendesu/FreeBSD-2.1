@@ -361,7 +361,6 @@ getpbuf()
 {
 	int s;
 	struct buf *bp;
-
 	s = splbio();
 	/* get a bp from the swap buffer header pool */
 	while ((bp = bswlist.tqh_first) == NULL) {
@@ -374,6 +373,13 @@ getpbuf()
 	bzero(bp, sizeof *bp);
 	bp->b_rcred = NOCRED;
 	bp->b_wcred = NOCRED;
+	/*
+	 * Calculate the addr of the buf by calculating its idx
+	 * in the swbuf map, multiplying by the size of of each buf,
+	 * and adding the product to swapbkva.
+	 *
+	 * #define MAXPHYS (64 * 1024)  // max raw IO xfer size 
+	 */
 	bp->b_data = (caddr_t) (MAXPHYS * (bp - swbuf)) + swapbkva;
 	bp->b_vnbufs.le_next = NOLIST;
 	return bp;

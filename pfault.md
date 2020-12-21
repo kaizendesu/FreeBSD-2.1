@@ -137,8 +137,8 @@ File: vm_page.c
 File: vm_pager.c
 	vm_pager_has_page			++--
 	vm_pager_get_pages			++--
-	getpbuf						----
-	relpbuf						----
+	getpbuf						++--
+	relpbuf						++--
 	vm_pager_map_page			++--
 	vm_pager_unmap_page			++--
 
