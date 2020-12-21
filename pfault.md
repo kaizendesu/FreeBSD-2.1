@@ -34,23 +34,6 @@ _alltraps
 					vm_fault_page_lookup
 				vm_pager_get_pages
 					vm_page_free
-					swap_pager_getpage
-						swap_pager_input
-							swap_pager_block_index
-							swap_pager_ridpages
-							swap_pager_freepage
-							swap_pager_block_offset
-							swap_pager_clean
-							getpbuf
-							pmap_qenter
-							pbgetvp
-							ufs_strategy
-								wdstrategy
-							pbrelvp
-							pmap_qremove
-							relpbuf
-							vm_page_deactivate
-							_swap_pager_freespace
 					vnode_pager_getpage
 						vnode_pager_input
 							vnode_pager_freepage
@@ -60,6 +43,7 @@ _alltraps
 									pmap_kenter
 								vm_page_bits
 								vnode_pager_addr
+									getpbuf
 									ufs_bmap
 										ufs_bmaparray
 											ufs_getlbns
@@ -147,18 +131,6 @@ File: vm_pager.c
 	vm_pager_map_page			++--
 	vm_pager_unmap_page			++--
 
-File: swap_pager.c
-	swap_pager_haspage			++--
-	_swap_pager_haspage			++--
-	swap_pager_getpage			++--
-	swap_pager_input			+---
-	swap_pager_block_index		----
-	swap_pager_ridpages			----
-	swap_pager_freepage			----
-	swap_pager_block_offset		----
-	swap_pager_clean			----
-	_swap_pager_freespace		----
-
 File: vfs_bio.c
 	incore						++--
 
@@ -183,8 +155,6 @@ File: wd.c
 File: pmap.c
 	pmap_zero_page				++--
 	pmap_copy_page				++--
-	pmap_qenter					----
-	pmap_qremove				----
 	pmap_kenter					++--
 	pmap_kremove				++--
 	pmap_enter					----
@@ -508,42 +478,6 @@ struct pagerops {
 #define	VM_PAGER_GET_MULTI(pg, m, c, r, s)	(*(pg)->pg_ops->pgo_getpages)(pg, m, c, r, s)
 ```
 
-### *swpager* and *swbloc* Structures
-
-```c
-/* From /sys/vm/swap_pager.h */
-
-/*
- * SWB_NPAGES can be set to any value from 1 to 16 pages per allocation,
- * however, due to the allocation spilling into non-swap pager backed memory,
- * suggest keeping SWB_NPAGES small (1-4).  If high performance is manditory
- * perhaps up to 8 pages might be in order????
- * Above problem has been fixed, now we support 16 pages per block.  Unused
- * space is recovered by the swap pager now...
- */
-#define SWB_NPAGES 8
-struct swblock {
-	unsigned short swb_valid;	/* bitmask for valid pages */
-	unsigned short swb_locked;	/* block locked */
-	int swb_block[SWB_NPAGES];	/* unfortunately int instead of daddr_t */
-};
-typedef struct swblock *sw_blk_t;
-
-/*
- * Swap pager private data.
- */
-struct swpager {
-	vm_size_t sw_osize;	/* size of object we are backing (bytes) */
-	int sw_nblocks;		/* number of blocks in list (sw_blk_t units) */
-	int sw_allocsize;	/* amount of space actually allocated */
-	sw_blk_t sw_blocks;	/* pointer to list of swap blocks */
-	short sw_flags;		/* flags */
-	short sw_poip;		/* pageouts in progress */
-	short sw_piip;		/* pageins in progress */
-};
-typedef struct swpager *sw_pager_t;
-```
-
 ### *indir* Structure
 
 ```c
@@ -689,28 +623,6 @@ struct indir {
 	* Calls vm\_page\_zero\_fill for the req page.
 	* Returns VM\_PAGER\_OK.
 2. If the pager does not have the pgo\_getpages op, calls PAGE\_WAKEUP on all ra/rb pages and pgo\_getpage on the req page. Otherwise, calls pgo\_getpages.
-
-**swap_pager_getpage**: Assigns pg to a marray and uses it to call swap\_pager\_input.
-
-**swap_pager_input**:
-
-**swap_pager_block_index**:
-
-**swap_pager_ridpages**:
-
-**swap_pager_freepage**:
-
-**swap_pager_block_offset**:
-
-**pbrelvp**:
-
-**pmap_qremove**:
-
-**relpbuf**:
-
-**vm_page_deactivate**:
-
-\_**swap_pager_freespace**:
 
 **vnode_pager_getpage**: Assigns pg to a marray and uses it to call vnode\_pager\_input.
 
