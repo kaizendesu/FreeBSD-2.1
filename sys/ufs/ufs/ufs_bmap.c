@@ -75,6 +75,8 @@ ufs_bmap(ap)
 	 */
 	if (ap->a_vpp != NULL)
 		*ap->a_vpp = VTOI(ap->a_vp)->i_devvp;
+
+	/* Check if we have a blk ptr to pass to use_bmaparray */
 	if (ap->a_bnp == NULL)
 		return (0);
 
@@ -142,8 +144,12 @@ ufs_bmaparray(vp, bn, bnp, ap, nump, runp)
 		return (error);
 
 	num = *nump;
-	if (num == 0) {
+	if (num == 0) {		/* bn is a direct blk */
 		*bnp = blkptrtodb(ump, ip->i_db[bn]);
+		/*
+		 * If there is an error in converting the blk ptr to 
+		 * a disk blk, set the blk ptr to -1.
+		 */
 		if (*bnp == 0)
 			*bnp = -1;
 		else if (runp)
@@ -235,19 +241,20 @@ ufs_getlbns(vp, bn, ap, nump)
 		*nump = 0;
 	numlevels = 0;
 	realbn = bn;
+
+	/* Check whether the bn is an direct block */
 	if ((long)bn < 0)
 		bn = -(long)bn;
 
 	/* The first NDADDR blocks are direct blocks. */
 	if (bn < NDADDR)
 		return (0);
-
 	/*
 	 * Determine the number of levels of indirection.  After this loop
 	 * is done, blockcnt indicates the number of data blocks possible
 	 * at the given level of indirection, and NIADDR - i is the number
 	 * of levels of indirection needed to locate the requested block.
-	 */
+	 *//*              i = 3       bn -= 3             bn -= 1       */
 	for (blockcnt = 1, i = NIADDR, bn -= NDADDR;; i--, bn -= blockcnt) {
 		if (i == 0)
 			return (EFBIG);
@@ -255,13 +262,22 @@ ufs_getlbns(vp, bn, ap, nump)
 		if (bn < blockcnt)
 			break;
 	}
-
-	/* Calculate the address of the first meta-block. */
+	/*
+	 * Calculate the address of the first meta-block.
+	 *
+	 * The conditional realbn >= 0 makes no sense unless the bn is
+	 * corrupt. There should never be a positive bn >= NDADDR.
+	 *
+	 * Hence, the code should be:
+	 * if (realbn >= 0)
+	 * 		return (EINVAL);
+	 * else
+	 * 		metalbn = -(-realbn - bn + NIADDR - i);
+	 */
 	if (realbn >= 0)
 		metalbn = -(realbn - bn + NIADDR - i);
 	else
 		metalbn = -(-realbn - bn + NIADDR - i);
-
 	/*
 	 * At each iteration, off is the offset into the bap array which is
 	 * an array of disk addresses at the current level of indirection.

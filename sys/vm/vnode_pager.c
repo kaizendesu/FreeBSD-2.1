@@ -593,7 +593,6 @@ vnode_pager_input_smlfs(vnp, m)
 			splx(s);
 			if ((bp->b_flags & B_ERROR) != 0)
 				error = EIO;
-
 			/*
 			 * free the buffer header back to the swap buffer pool
 			 */

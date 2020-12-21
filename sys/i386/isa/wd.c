@@ -525,7 +525,6 @@ wdstrategy(register struct buf *bp)
 		bp->b_flags |= B_ERROR;
 		goto done;
 	}
-
 	/*
 	 * Do bounds checking, adjust transfer, set b_cylin and b_pbklno.
 	 */
@@ -560,7 +559,6 @@ wdstrategy(register struct buf *bp)
 			}
 		}
 	}
-
 	/* queue transfer on drive, activate drive and controller if idle */
 	dp = &wdutab[lunit];
 	s = splbio();
