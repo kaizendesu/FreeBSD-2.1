@@ -88,9 +88,9 @@ File: trap.c
 	userret						++--
 
 File: vm_fault.c
-	vm_fault					+---
+	vm_fault					++--
 	vm_fault_additional_pages	+---
-	vm_fault_page_lookup		----
+	vm_fault_page_lookup		++--
 
 File: vm_map.c
 	vm_map_lookup				++--
@@ -504,32 +504,69 @@ struct indir {
 
 **trap_pfault**:
 
-**grow**:
 
 **vm_map_pmap**:
 
 **vm_fault**:
 
-1. Calls vm\_map\_lookup to obtain the backing store object and offset of the faulting virtual address.
-2. Locks the first object and obtains a pointer to its vnode by calling vnode\_pager\_lock.
-3. Locks the first object, increments its ref count, and increments paging\_in\_progress.
-4. While Loop: Searches for the page by calling vm\_page\_lookup with its object/offset pair.
-	* Found Hashed Page: Checks the pg's flag for PG\_BUSY and the page's busy count, calling tsleep if they are set.
-	* Found Hashed Page: Calls vm\_page\_unqueue so that the pageout daemon cannot tamper with it
-	* Found Hashed Page: Calls vm\_page\_activate if the pg is cached and there is not enough free and cached pgs, and then calls VM\_WAIT before restarting the loop. 
-	* Found Hashed Page: Sets PG\_BUSY and jumps to readrest if there are any invalid disk blks in the pg.
-	* Found Hashed page: Breaks out of the while loop.
-5. While Loop: Calls vm\_pager\_has\_page if the object's pager is a swap pager and the swap space is not full.
-6. While Loop: Calls vm\_page\_alloc to allocate a page in the current object and set it to PG\_BUSY.
-7. While Loop: If the object has a vnode/swap pager and we are not changing the page's wiring it...
-	* Unlocks the object
-	* Calls vm\_fault\_additional\_pages to see if there are any additional pages we can fault in for space locality
-	* Calls vm\_pager\_get\_pages to obtain the pages from disk/swap
-	* Calls vm\_page\_lookup in case the pager modified the page
-	* Increments hardfault and breaks.
-8. While Loop: Assigns m to first\_m if this is the first\_object.
-9. While Loop: Moves on to the next object, and if there is no object left it calls vm\_page\_zero\_fill on the first page.
-10. 
+From McKusick's notes:
+
+/*
+* Handle a page fault occurring at the given address,
+* requiring the given permissions, in the map specified.
+* If successful, insert the page into the associated
+* physical map.
+*/
+int vm_fault(
+vm\_map\_t map,
+vm\_offset\_t addr,
+vm\_prot\_t type)
+{
+RetryFault:
+lookup address in map returning object/offset/prot;
+first\_object = object;
+first\_page = NULL;
+
+for (;;) {
+page = lookup page at object/offset;
+if (page found) {
+if (page busy)
+block and goto RetryFault;
+remove from paging queues;
+mark page as busy;
+break;
+}
+if (object has nondefault pager or
+object == first\_object) {
+page = allocate a page for object/offset;
+if (no pages available)
+block and goto RetryFault;
+}
+if (object has nondefault pager) {
+scan for pages to cluster;
+call pager to fill page(s);
+if (IO error)
+return an error;
+if (pager has page)
+break;
+if (object != first\_object)
+free page;
+}
+/* no pager, or pager does not have page */
+if (object == first\_object)
+first\_page = page;
+next\_object = next object;
+if (no next object) {
+if (object != first\_object) {
+object = first\_object;
+page = first\_page;
+}
+first\_page = NULL;
+zero fill page;
+break;
+}
+object = next\_object;
+}
 
 **vm_map_lookup**:
 
