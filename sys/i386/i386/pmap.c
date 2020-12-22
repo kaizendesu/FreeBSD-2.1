@@ -1218,7 +1218,6 @@ pmap_enter(pmap, va, pa, prot, wired)
 	pa = i386_trunc_page(pa);
 	if (va > VM_MAX_KERNEL_ADDRESS)
 		panic("pmap_enter: toobig");
-
 	/*
 	 * Page Directory table entry not valid, we need a new PT page
 	 */
@@ -1229,7 +1228,6 @@ pmap_enter(pmap, va, pa, prot, wired)
 	}
 	pte = pmap_pte(pmap, va);
 	opa = pmap_pte_pa(pte);
-
 	/*
 	 * Mapping has not changed, must be protection or wiring change.
 	 */
@@ -1286,7 +1284,6 @@ pmap_enter(pmap, va, pa, prot, wired)
 		}
 		splx(s);
 	}
-
 	/*
 	 * Increment counters
 	 */
@@ -1299,7 +1296,6 @@ validate:
 	 * Now validate mapping with desired protection/wiring.
 	 */
 	npte = (pt_entry_t) ((int) (pa | pte_prot(pmap, prot) | PG_V));
-
 	/*
 	 * When forking (copy-on-write, etc): A process will turn off write
 	 * permissions for any of its writable pages.  If the data (object) is
@@ -1313,7 +1309,6 @@ validate:
 	 */
 	if (pa == opa)
 		(int) npte |= (int) *pte & (PG_M | PG_U);
-
 	if (wired)
 		(int) npte |= PG_W;
 	if (va < UPT_MIN_ADDRESS)
@@ -1321,11 +1316,14 @@ validate:
 	else if (va < UPT_MAX_ADDRESS)
 		(int) npte |= PG_u | PG_RW;
 
+	/* If we changed the mapping */
 	if (*pte != npte) {
 		if (*pte)
 			ptevalid++;
 		*pte = npte;
 	}
+
+	/* Need to flush if old pte was valid */
 	if (ptevalid) {
 		pmap_update();
 	} else {

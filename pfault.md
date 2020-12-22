@@ -157,7 +157,7 @@ File: pmap.c
 	pmap_copy_page				++--
 	pmap_kenter					++--
 	pmap_kremove				++--
-	pmap_enter					----
+	pmap_enter					++-+
 	pmap_use_pt					++--
 	pmap_unuse_pt				----
 
@@ -744,7 +744,7 @@ struct indir {
 
 **vm_object_collapse**:
 
-**pmap_enter**:
+**pmap_enter**: Obtains the pte of va and the pa of the pte, determines whether or not we are changing the wiring or the mapping, removes the old mapping, adds a new pv entry, assigns the new pte, and calls pmap\_update.
 
 **vm_page_wire**:
 
@@ -930,4 +930,148 @@ nogo:
 	return((rv == KERN_PROTECTION_FAILURE) ? SIGBUS : SIGSEGV);
 }
 
+/*
+ *	Insert the given physical page (p) at
+ *	the specified virtual address (v) in the
+ *	target physical map with the protection requested.
+ *
+ *	If specified, the page will be wired down, meaning
+ *	that the related pte can not be reclaimed.
+ *
+ *	NB:  This is the only routine which MAY NOT lazy-evaluate
+ *	or lose information.  That is, this routine must actually
+ *	insert this page into the given map NOW.
+ */
+void
+pmap_enter(pmap, va, pa, prot, wired)
+	register pmap_t pmap;
+	vm_offset_t va;
+	register vm_offset_t pa;
+	vm_prot_t prot;
+	boolean_t wired;
+{
+	register pt_entry_t *pte;
+	register pt_entry_t npte;
+	vm_offset_t opa;
+	int ptevalid = 0;
+
+	if (pmap == NULL)
+		return;
+
+	va = i386_trunc_page(va);
+	pa = i386_trunc_page(pa);
+	if (va > VM_MAX_KERNEL_ADDRESS)
+		panic("pmap_enter: toobig");
+	/*
+	 * Page Directory table entry not valid, we need a new PT page
+	 */
+	if (*pmap_pde(pmap, va) == 0) {
+		printf("kernel page directory invalid pdir=%p, va=0x%lx\n",
+			pmap->pm_pdir[PTDPTDI], va);
+		panic("invalid kernel page directory");
+	}
+	pte = pmap_pte(pmap, va);
+	opa = pmap_pte_pa(pte);
+	/*
+	 * Mapping has not changed, must be protection or wiring change.
+	 */
+	if (opa == pa) {
+		/*
+		 * Wiring change, just update stats. We don't worry about
+		 * wiring PT pages as they remain resident as long as there
+		 * are valid mappings in them. Hence, if a user page is wired,
+		 * the PT page will be also.
+		 */
+		if (wired && !pmap_pte_w(pte))
+			pmap->pm_stats.wired_count++;
+		else if (!wired && pmap_pte_w(pte))
+			pmap->pm_stats.wired_count--;
+
+		goto validate;
+	}
+	/*
+	 * Mapping has changed, invalidate old range and fall through to
+	 * handle validating new mapping.
+	 */
+	if (opa) {
+		pmap_remove(pmap, va, va + PAGE_SIZE);
+	}
+	/*
+	 * Enter on the PV list if part of our managed memory Note that we
+	 * raise IPL while manipulating pv_table since pmap_enter can be
+	 * called at interrupt time.
+	 */
+	if (pmap_is_managed(pa)) {
+		register pv_entry_t pv, npv;
+		int s;
+
+		pv = pa_to_pvh(pa);
+		s = splhigh();
+		/*
+		 * No entries yet, use header as the first entry
+		 */
+		if (pv->pv_pmap == NULL) {
+			pv->pv_va = va;
+			pv->pv_pmap = pmap;
+			pv->pv_next = NULL;
+		}
+		/*
+		 * There is at least one other VA mapping this page. Place
+		 * this entry after the header.
+		 */
+		else {
+			npv = get_pv_entry();
+			npv->pv_va = va;
+			npv->pv_pmap = pmap;
+			npv->pv_next = pv->pv_next;
+			pv->pv_next = npv;
+		}
+		splx(s);
+	}
+	/*
+	 * Increment counters
+	 */
+	pmap->pm_stats.resident_count++;
+	if (wired)
+		pmap->pm_stats.wired_count++;
+
+validate:
+	/*
+	 * Now validate mapping with desired protection/wiring.
+	 */
+	npte = (pt_entry_t) ((int) (pa | pte_prot(pmap, prot) | PG_V));
+	/*
+	 * When forking (copy-on-write, etc): A process will turn off write
+	 * permissions for any of its writable pages.  If the data (object) is
+	 * only referred to by one process, the processes map is modified
+	 * directly as opposed to using the object manipulation routine.  When
+	 * using pmap_protect, the modified bits are not kept in the vm_page_t
+	 * data structure.  Therefore, when using pmap_enter in vm_fault to
+	 * bring back writability of a page, there has been no memory of the
+	 * modified or referenced bits except at the pte level.  this clause
+	 * supports the carryover of the modified and used (referenced) bits.
+	 */
+	if (pa == opa)
+		(int) npte |= (int) *pte & (PG_M | PG_U);
+	if (wired)
+		(int) npte |= PG_W;
+	if (va < UPT_MIN_ADDRESS)
+		(int) npte |= PG_u;
+	else if (va < UPT_MAX_ADDRESS)
+		(int) npte |= PG_u | PG_RW;
+
+	/* If we changed the mapping */
+	if (*pte != npte) {
+		if (*pte)
+			ptevalid++;
+		*pte = npte;
+	}
+
+	/* Need to flush if old pte was valid */
+	if (ptevalid) {
+		pmap_update();
+	} else {
+		pmap_use_pt(pmap, va);
+	}
+}
 ```
