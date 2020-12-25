@@ -100,13 +100,6 @@ File: vm_object.c
 	vm_object_shadow			++--
 	vm_object_collapse			----
 
-File: vnode_pager.c
-	vnode_pager_lock			++--
-	vnode_pager_getpage			++--
-	vnode_pager_input			++--
-	vnode_pager_freepage		++--
-	vnode_pager_addr			++--
-
 File: vm_page.c
 	vm_page_lookup				++--
 	vm_page_alloc				++--
@@ -125,11 +118,19 @@ File: vm_page.c
 
 File: vm_pager.c
 	vm_pager_has_page			++--
-	vm_pager_get_pages			++--
+	vm_pager_get_pages			++-+
 	getpbuf						++--
 	relpbuf						++--
 	vm_pager_map_page			++--
 	vm_pager_unmap_page			++--
+
+File: vnode_pager.c
+	vnode_pager_lock			++--
+	vnode_pager_getpage			++-+
+	vnode_pager_input			++-+
+	vnode_pager_input_smlfs		++-+
+	vnode_pager_freepage		++--
+	vnode_pager_addr			++--
 
 File: vfs_bio.c
 	incore						++--
@@ -147,10 +148,10 @@ File: ufs_bmap.c
 	ufs_bmaparray				++--
 
 File: ufs_vnops
-	ufs_strategy				++--
+	ufs_strategy				++-+
 
 File: wd.c
-	wdstrategy					++--
+	wdstrategy					++-+
 
 File: pmap.c
 	pmap_zero_page				++--
@@ -965,6 +966,363 @@ nogo:
 	frame->tf_err = eva;
 
 	return((rv == KERN_PROTECTION_FAILURE) ? SIGBUS : SIGSEGV);
+}
+
+int
+vm_pager_get_pages(pager, m, count, reqpage, sync)
+	vm_pager_t pager;
+	vm_page_t *m;
+	int count;
+	int reqpage;
+	boolean_t sync;
+{
+	int i;
+
+	if (pager == NULL) {
+		for (i = 0; i < count; i++) {
+			if (i != reqpage) {
+				PAGE_WAKEUP(m[i]);
+				vm_page_free(m[i]);
+			}
+		}
+		vm_page_zero_fill(m[reqpage]);
+		return VM_PAGER_OK;
+	}
+	if (pager->pg_ops->pgo_getpages == 0) {
+		for (i = 0; i < count; i++) {
+			if (i != reqpage) {
+				PAGE_WAKEUP(m[i]);
+				vm_page_free(m[i]);
+			}
+		}
+		return (VM_PAGER_GET(pager, m[reqpage], sync));
+	} else {
+		return (VM_PAGER_GET_MULTI(pager, m, count, reqpage, sync));
+	}
+}
+
+int
+vnode_pager_getpage(pager, m, sync)
+	vm_pager_t pager;
+	vm_page_t m;
+	boolean_t sync;
+{
+	vm_page_t marray[1];
+
+	if (pager == NULL)
+		return FALSE;
+	marray[0] = m;
+
+	return vnode_pager_input((vn_pager_t) pager->pg_data, marray, 1, 0);
+}
+
+/*
+ * generic vnode pager input routine
+ */
+int
+vnode_pager_input(vnp, m, count, reqpage)
+	register vn_pager_t vnp;
+	vm_page_t *m;
+	int count, reqpage;
+{
+	int i;
+	vm_offset_t kva, foff;
+	int size;
+	vm_object_t object;
+	struct vnode *dp, *vp;
+	int bsize;
+
+	int first, last;
+	int firstaddr;
+	int block, offset;
+	int runpg;
+	int runend;
+
+	struct buf *bp;
+	int s;
+	int failflag;
+
+	int error = 0;
+
+	object = m[reqpage]->object;	/* all vm_page_t items are in same
+					 * object */
+
+	vp = vnp->vnp_vp;
+
+	/* #define BLKDEV_IOSIZE 2048 */
+	bsize = vp->v_mount->mnt_stat.f_iosize;
+
+	/* get the UNDERLYING device for the file with VOP_BMAP() */
+
+	/*
+	 * originally, we did not check for an error return value -- assuming
+	 * an fs always has a bmap entry point -- that assumption is wrong!!!
+	 */
+	foff = m[reqpage]->offset;
+
+	/*
+	 * if we can't bmap, use old VOP code
+	 *
+	 * ufs_bmap will return zero upon checking if the 4th
+	 * argument is NULL. Hence, we always use the old code.
+	 */
+	if (VOP_BMAP(vp, 0, &dp, 0, 0)) {
+		for (i = 0; i < count; i++) {
+			if (i != reqpage) {
+				vnode_pager_freepage(m[i]);
+			}
+		}
+		cnt.v_vnodein++;
+		cnt.v_vnodepgsin++;
+		return vnode_pager_input_old(vnp, m[reqpage]);
+		/*
+		 * if the blocksize is smaller than a page size, then use
+		 * special small filesystem code.  NFS sometimes has a small
+		 * blocksize, but it can handle large reads itself.
+		 */
+	} else if ((PAGE_SIZE / bsize) > 1 &&
+	    (vp->v_mount->mnt_stat.f_type != MOUNT_NFS)) {
+
+		for (i = 0; i < count; i++) {
+			if (i != reqpage) {
+				vnode_pager_freepage(m[i]);
+			}
+		}
+		cnt.v_vnodein++;
+		cnt.v_vnodepgsin++;
+		return vnode_pager_input_smlfs(vnp, m[reqpage]);
+	}
+
+	.
+	.
+	.
+}
+
+/*
+ * small block file system vnode pager input
+ */
+int
+vnode_pager_input_smlfs(vnp, m)
+	vn_pager_t vnp;
+	vm_page_t m;
+{
+	int i;
+	int s;
+	struct vnode *dp, *vp;
+	struct buf *bp;
+	vm_offset_t kva;
+	int fileaddr;
+	int block;
+	vm_offset_t bsize;
+	int error = 0;
+
+	vp = vnp->vnp_vp;
+	bsize = vp->v_mount->mnt_stat.f_iosize;
+
+	VOP_BMAP(vp, 0, &dp, 0, 0);
+
+	kva = vm_pager_map_page(m);
+
+	for (i = 0; i < PAGE_SIZE / bsize; i++) {
+
+		if ((vm_page_bits(m->offset + i * bsize, bsize) & m->valid))
+			continue;
+
+		fileaddr = vnode_pager_addr(vp, m->offset + i * bsize, (int *)0);
+		if (fileaddr != -1) {
+			bp = getpbuf();
+
+			/* build a minimal buffer header */
+			bp->b_flags = B_BUSY | B_READ | B_CALL;
+			bp->b_iodone = vnode_pager_iodone;
+			bp->b_proc = curproc;
+			bp->b_rcred = bp->b_wcred = bp->b_proc->p_ucred;
+			if (bp->b_rcred != NOCRED)
+				crhold(bp->b_rcred);
+			if (bp->b_wcred != NOCRED)
+				crhold(bp->b_wcred);
+			bp->b_un.b_addr = (caddr_t) kva + i * bsize;
+			bp->b_blkno = fileaddr;
+			pbgetvp(dp, bp);
+			bp->b_bcount = bsize;
+			bp->b_bufsize = bsize;
+
+			/* do the input */
+			VOP_STRATEGY(bp);
+
+			/* we definitely need to be at splbio here */
+
+			s = splbio();
+			while ((bp->b_flags & B_DONE) == 0) {
+				tsleep((caddr_t) bp, PVM, "vnsrd", 0);
+			}
+			splx(s);
+			if ((bp->b_flags & B_ERROR) != 0)
+				error = EIO;
+			/*
+			 * free the buffer header back to the swap buffer pool
+			 */
+			relpbuf(bp);
+			if (error)
+				break;
+
+			vm_page_set_clean(m, (i * bsize) & (PAGE_SIZE-1), bsize);
+			vm_page_set_valid(m, (i * bsize) & (PAGE_SIZE-1), bsize);
+		} else {
+			vm_page_set_clean(m, (i * bsize) & (PAGE_SIZE-1), bsize);
+			bzero((caddr_t) kva + i * bsize, bsize);
+		}
+nextblock:
+	}
+	vm_pager_unmap_page(kva);
+	pmap_clear_modify(VM_PAGE_TO_PHYS(m));
+	if (error) {
+		return VM_PAGER_ERROR;
+	}
+	return VM_PAGER_OK;
+}
+
+/*
+ * Calculate the logical to physical mapping if not done already,
+ * then call the device strategy routine.
+ */
+int
+ufs_strategy(ap)
+	struct vop_strategy_args /* {
+		struct buf *a_bp;
+	} */ *ap;
+{
+	register struct buf *bp = ap->a_bp;
+	register struct vnode *vp = bp->b_vp;
+	register struct inode *ip;
+	int error;
+
+	ip = VTOI(vp);
+	if (vp->v_type == VBLK || vp->v_type == VCHR)
+		panic("ufs_strategy: spec");
+
+	/* Find the physical blk nb if not done already */
+	if (bp->b_blkno == bp->b_lblkno) {
+		error = VOP_BMAP(vp, bp->b_lblkno, NULL, &bp->b_blkno, NULL);
+		if (error) {
+			bp->b_error = error;
+			bp->b_flags |= B_ERROR;
+			biodone(bp);
+			return (error);
+		}
+		if ((long)bp->b_blkno == -1)
+			vfs_bio_clrbuf(bp);
+	}
+	/* If blkno is -1 we set the io as done and return */
+	if ((long)bp->b_blkno == -1) {
+		biodone(bp);
+		return (0);
+	}
+	vp = ip->i_devvp;
+	bp->b_dev = vp->v_rdev;
+
+	/* ((*((vp->v_op)[VOFFSET(vop_strategy)]))(ap)) */
+	VOCALL (vp->v_op, VOFFSET(vop_strategy), ap);
+	return (0);
+}
+
+/* Read/write routine for a buffer.  Finds the proper unit, range checks
+ * arguments, and schedules the transfer.  Does not wait for the transfer
+ * to complete.  Multi-page transfers are supported.  All I/O requests must
+ * be a multiple of a sector in length.
+ */
+void
+wdstrategy(register struct buf *bp)
+{
+	register struct buf *dp;
+	struct disk *du;
+	int	lunit = dkunit(bp->b_dev);
+	int	s;
+
+	/* valid unit, controller, and request?  */
+	if (lunit >= NWD || bp->b_blkno < 0 || (du = wddrives[lunit]) == NULL
+	    || bp->b_bcount % DEV_BSIZE != 0) {
+
+		bp->b_error = EINVAL;
+		bp->b_flags |= B_ERROR;
+		goto done;
+	}
+	/*
+	 * Do bounds checking, adjust transfer, set b_cylin and b_pbklno.
+	 */
+	if (dscheck(bp, du->dk_slices) <= 0)
+		goto done;
+
+	/*
+	 * Check for *any* block on this transfer being on the bad block list
+	 * if it is, then flag the block as a transfer that requires
+	 * bad block handling.  Also, used as a hint for low level disksort
+	 * clustering code to keep from coalescing a bad transfer into
+	 * a normal transfer.  Single block transfers for a large number of
+	 * blocks associated with a cluster I/O are undesirable.
+	 *
+	 * XXX the old disksort() doesn't look at B_BAD.  Coalescing _is_
+	 * desirable.  We should split the results at bad blocks just
+	 * like we should split them at MAXTRANSFER boundaries.
+	 */
+	if (dsgetbad(bp->b_dev, du->dk_slices) != NULL) {
+		long *badsect = dsgetbad(bp->b_dev, du->dk_slices)->bi_bad;
+		int i;
+		int nsecs = howmany(bp->b_bcount, DEV_BSIZE);
+		/* XXX pblkno is too physical. */
+		daddr_t nspblkno = bp->b_pblkno
+		    - du->dk_slices->dss_slices[dkslice(bp->b_dev)].ds_offset;
+		int blkend = nspblkno + nsecs;
+
+		for (i = 0; badsect[i] != -1 && badsect[i] < blkend; i++) {
+			if (badsect[i] >= nspblkno) {
+				bp->b_flags |= B_BAD;
+				break;
+			}
+		}
+	}
+	/* queue transfer on drive, activate drive and controller if idle */
+	dp = &wdutab[lunit];
+	s = splbio();
+
+	disksort(dp, bp);
+
+	if (dp->b_active == 0)
+		wdustart(du);	/* start drive */
+
+	/* Pick up changes made by readdisklabel(). */
+	if (du->dk_flags & DKFL_LABELLING && du->dk_state > RECAL) {
+		wdsleep(du->dk_ctrlr, "wdlab");
+		du->dk_state = WANTOPEN;
+	}
+
+	if (wdtab[du->dk_ctrlr].b_active == 0)
+		wdstart(du->dk_ctrlr);	/* start controller */
+
+	if (du->dk_dkunit >= 0) {
+		/*
+		 * XXX perhaps we should only count successful transfers.
+		 */
+		dk_xfer[du->dk_dkunit]++;
+		/*
+		 * XXX we can't count seeks correctly but we can do better
+		 * than this.  E.g., assume that the geometry is correct
+		 * and count 1 seek if the starting cylinder of this i/o
+		 * differs from the starting cylinder of the previous i/o,
+		 * or count 1 seek if the starting bn of this i/o doesn't
+		 * immediately follow the ending bn of the previos i/o.
+		 */
+		dk_seek[du->dk_dkunit]++;
+	}
+
+	splx(s);
+	return;
+
+done:
+	s = splbio();
+	/* toss transfer, we're done early */
+	biodone(bp);
+	splx(s);
 }
 
 /*
