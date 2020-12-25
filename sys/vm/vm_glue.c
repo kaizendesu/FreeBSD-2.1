@@ -188,13 +188,13 @@ vm_fork(p1, p2, isvfork)
 	while ((cnt.v_free_count + cnt.v_cache_count) < cnt.v_free_min) {
 		VM_WAIT;
 	}
-
 	/*
 	 * avoid copying any of the parent's pagetables or other per-process
 	 * objects that reside in the map by marking all of them
 	 * non-inheritable
 	 */
 	(void) vm_map_inherit(&p1->p_vmspace->vm_map,
+		/*      EFC00000 - 2 * 4096    ,   EFFBF000 */
 	    UPT_MIN_ADDRESS - UPAGES * NBPG, VM_MAX_ADDRESS, VM_INHERIT_NONE);
 	p2->p_vmspace = vmspace_fork(p1->p_vmspace);
 
@@ -202,17 +202,15 @@ vm_fork(p1, p2, isvfork)
 	if (p1->p_vmspace->vm_shm)
 		shmfork(p1, p2, isvfork);
 #endif
-
 	/*
 	 * Allocate a wired-down (for now) pcb and kernel stack for the
 	 * process
 	 */
-
 	addr = (vm_offset_t) kstack;
 
 	map = &p2->p_vmspace->vm_map;
 
-	/* get new pagetables and kernel stack */
+	/* get new pagetables and kernel stack. */
 	error = vm_map_find(map, NULL, 0, &addr, UPT_MAX_ADDRESS - addr, FALSE);
 	if (error != KERN_SUCCESS)
 		panic("vm_fork: vm_map_find failed, addr=0x%x, error=%d", addr, error);
@@ -241,7 +239,6 @@ vm_fork(p1, p2, isvfork)
 		    VM_PROT_READ | VM_PROT_WRITE, 1);
 
 	p2->p_addr = up;
-
 	/*
 	 * p_stats and p_sigacts currently point at fields in the user struct
 	 * but not at &u, instead at p_addr. Copy p_sigacts and parts of
@@ -256,7 +253,6 @@ vm_fork(p1, p2, isvfork)
 	bcopy(&p1->p_stats->pstat_startcopy, &up->u_stats.pstat_startcopy,
 	    ((caddr_t) &up->u_stats.pstat_endcopy -
 		(caddr_t) &up->u_stats.pstat_startcopy));
-
 
 	/*
 	 * cpu_fork will copy and update the kernel stack and pcb, and make

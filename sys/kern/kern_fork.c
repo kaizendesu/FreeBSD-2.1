@@ -108,7 +108,6 @@ fork1(p1, isvfork, retval)
 	 * are hard-limits as to the number of processes that can run.
 	 */
 	nprocs++;
-
 	/*
 	 * Increment the count of procs running with this uid. Don't allow
 	 * a nonprivileged user to exceed their current limit.
@@ -125,7 +124,6 @@ fork1(p1, isvfork, retval)
 
 	/* Allocate new proc. */
 	MALLOC(newproc, struct proc *, sizeof(struct proc), M_PROC, M_WAITOK);
-
 	/*
 	 * Find an unused process ID.  We remember a range of unused IDs
 	 * ready to use (from nextpid+1 through pidchecked-1).
@@ -136,7 +134,7 @@ retry:
 	 * If the process ID prototype has wrapped around,
 	 * restart somewhat above 0, as the low-numbered procs
 	 * tend to include daemons that don't exit.
-	 */
+	 *//* PID_MAX = 30000 */
 	if (nextpid >= PID_MAX) {
 		nextpid = 100;
 		pidchecked = 0;
@@ -149,7 +147,7 @@ retry:
 		 * Scan the active and zombie procs to check whether this pid
 		 * is in use.  Remember the lowest pid that's greater
 		 * than nextpid, so we can avoid checking for a while.
-		 */
+		 *//* allproc is the linked list of all procs */
 		p2 = (struct proc *)allproc;
 again:
 		for (; p2 != NULL; p2 = p2->p_next) {
@@ -159,6 +157,10 @@ again:
 				if (nextpid >= pidchecked)
 					goto retry;
 			}
+			/*
+			 * Set pidchecked to the the pid/pg_id that
+			 * satisfies nextpid < pid/pg_id < pidchecked.
+			 */
 			if (p2->p_pid > nextpid && pidchecked > p2->p_pid)
 				pidchecked = p2->p_pid;
 			if (p2->p_pgrp->pg_id > nextpid &&
@@ -171,8 +173,6 @@ again:
 			goto again;
 		}
 	}
-
-
 	/*
 	 * Link onto allproc (this should probably be delayed).
 	 * Heavy use of volatile here to prevent the compiler from
@@ -181,12 +181,13 @@ again:
 	 */
 	p2 = newproc;
 #define	Vp2 ((volatile struct proc *)p2)
+	/* SIDL := proc being created by fork */
 	Vp2->p_stat = SIDL;			/* protect against others */
 	Vp2->p_pid = nextpid;
 	/*
 	 * This is really:
 	 *	p2->p_next = allproc;
-	 *	allproc->p_prev = &p2->p_next;
+	 *	allproc->p_prev = &p2->p_next; (&allproc)
 	 *	p2->p_prev = &allproc;
 	 *	allproc = p2;
 	 * The assignment via allproc is legal since it is never NULL.
@@ -203,11 +204,15 @@ again:
 	hash = &pidhash[PIDHASH(p2->p_pid)];
 	p2->p_hash = *hash;
 	*hash = p2;
-
 	/*
 	 * Make a proc table entry for the new process.
 	 * Start by zeroing the section of proc that is zero-initialized,
 	 * then copy the section that is copied directly from the parent.
+	 *
+	 * #define p_startzero p_ysptr   // younger sibling ptr
+	 * #define p_endzero p_startcopy
+	 * #define p_startcopy p_sigmask // current signal mask
+	 * #define p_endcopy p_thread    // ID for this "thread"
 	 */
 	bzero(&p2->p_startzero,
 	    (unsigned) ((caddr_t)&p2->p_endzero - (caddr_t)&p2->p_startzero));
@@ -218,7 +223,6 @@ again:
 	 * XXX: this should be done as part of the startzero above
 	 */
 	p2->p_vmspace = 0;		/* XXX */
-
 	/*
 	 * Duplicate sub-structures as needed.
 	 * Increase reference counts on shared objects.
@@ -251,10 +255,9 @@ again:
 		p2->p_limit = p1->p_limit;
 		p2->p_limit->p_refcnt++;
 	}
-
 	/*
 	 * Preserve some flags in subprocess.
-	 */
+	 *//* Set User GID */
 	p2->p_flag |= p1->p_flag & P_SUGID;
 	if (p1->p_session->s_ttyvp != NULL && p1->p_flag & P_CONTROLT)
 		p2->p_flag |= P_CONTROLT;
@@ -278,18 +281,15 @@ again:
 			VREF(p2->p_tracep);
 	}
 #endif
-
 	/*
 	 * set priority of child to be that of parent
 	 */
 	p2->p_estcpu = p1->p_estcpu;
-
 	/*
 	 * This begins the section where we must prevent the parent
 	 * from being swapped.
 	 */
 	p1->p_flag |= P_NOSWAP;
-
 	/*
 	 * Set return values for child before vm_fork,
 	 * so they can be copied to child stack.
@@ -306,10 +306,9 @@ again:
 		 */
 		microtime(&runtime);
 		p2->p_stats->p_start = runtime;
-		p2->p_acflag = AFORK;
+		p2->p_acflag = AFORK;	/* AFORK := forked but not execed */
 		return (0);
 	}
-
 	/*
 	 * Make child runnable and add to run queue.
 	 */
@@ -317,12 +316,10 @@ again:
 	p2->p_stat = SRUN;
 	setrunqueue(p2);
 	(void) spl0();
-
 	/*
 	 * Now can be swapped.
 	 */
 	p1->p_flag &= ~P_NOSWAP;
-
 	/*
 	 * Preserve synchronization semantics of vfork.  If waiting for
 	 * child to exec or exit, set P_PPWAIT on child, and sleep on our
@@ -331,7 +328,6 @@ again:
 	if (isvfork)
 		while (p2->p_flag & P_PPWAIT)
 			tsleep(p1, PWAIT, "ppwait", 0);
-
 	/*
 	 * Return child pid to parent process,
 	 * marking us as parent via retval[1].

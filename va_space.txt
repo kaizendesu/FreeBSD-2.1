@@ -1,0 +1,63 @@
+       FreeBSD Virtual Address Space
+___________________________________________
+|                                         |
+|                                         |
+|             Kernel Space                |
+|                                         |
+|_________________________________________| F0000000 (KERNBASE)
+|                                         |
+|        Alternate Page Table Pgs         |
+|_________________________________________| EFFC1000
+|                                         |
+|         Kernel Page Table Pgs           |
+|_________________________________________| EFFBF000 (UPT_MAX_ADDRESS)
+|                                         |
+|           User Page Table Pgs           |
+|_________________________________________| EFC00000 (UPT_MIN_ADDRESS)
+|                                         |
+|                                         |
+|                                         |
+|                                         |
+|                                         |
+|                                         |
+|                                         |
+|                                         |
+|              User Space                 |
+|                                         |
+|                                         |
+|                                         |
+|                                         |
+|                                         |
+|                                         |
+|                                         |
+|_________________________________________| 00001000
+
+
+KERNBASE = (0x400 - 1 - NKPDE) * (NBPG * NPTEPG)
+         = Nb of user pdes * ptes per pg * sz of pg
+		 = Size of user virtual address space
+         = (1024 - 1 - 63) * (4096 * 1024)
+         = 960 * 4096 * 1024
+         = 4026531840 = 4GiB
+		 = F0000000
+
+Even though the definition of UPT_MIN_ADDRESS uses NPTEPG, it is
+really referring to the NPDEPG. This works because NPTEPG == NPDEPG.
+
+UPT_MIN_ADDRESS = (vm_offset_t)KERNBASE - (NBPG * NPTEPG)
+				= KERNBASE - (sz of pg * nb page dir entries per pg)
+				= KERNBASE - (sz of pg * nb of page tbl pgs)
+				= KERNBASE - (total sz of page tbl pgs)
+                = F0000000 - (4096 * 1024)
+                = F0000000 - 400000
+                = EFC00000
+				= base of page tbl pgs in va space
+
+UPT_MAX_ADDRESS = (vm_offset_t)KERNBASE - (NBPG * (NKPDE+2))
+				= KERNBASE - (sz of pg * nb of kernel pde's + 2)
+				= Base of kernel page tbl pgs
+                = F0000000 - (4096 * 65)
+				= EFFBF000
+
+Hence, the first 958 page tbl pgs are for user space, and the next 64
+are the kernel page tbl pgs, and the last two are for the APT.

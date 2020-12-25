@@ -569,7 +569,6 @@ cpu_fork(p1, p2)
 	p2->p_md.md_regs = p1->p_md.md_regs;
 
 	pmap_activate(&p2->p_vmspace->vm_pmap, &up->u_pcb);
-
 	/*
 	 * Return (0) in parent, (1) in child.
 	 */
