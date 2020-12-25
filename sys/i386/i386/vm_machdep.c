@@ -568,6 +568,16 @@ cpu_fork(p1, p2)
 	    (unsigned) ctob(UPAGES) - offset);
 	p2->p_md.md_regs = p1->p_md.md_regs;
 
+	/*
+	 * #define PMAP_ACTIVATE(pmapp, pcbp) \
+	 * 		if ((pmapp) != NULL) { \
+	 * 			(pcbp)->pcb_cr3 = \
+	 * 				pmap_extract(kernel_pmap, (vm_offset_t)(pmapp)->pm_dir); \
+	 * 			if ((pmapp) == &curproc->p_vmspace->vm_pmap) \
+	 * 					load_cr3((pcbp)->pcb_cr3); \
+	 * 			(pmapp)->pm_pdchanged = FALSE; \
+	 * 	}
+	 */
 	pmap_activate(&p2->p_vmspace->vm_pmap, &up->u_pcb);
 	/*
 	 * Return (0) in parent, (1) in child.

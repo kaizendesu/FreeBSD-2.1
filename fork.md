@@ -13,6 +13,7 @@
 fork1
 	vm_fork
 		cpu_fork
+			savectx
 ```
 
 ## Reading Checklist
@@ -36,12 +37,12 @@ File: vm_machdep.c
 	cpu_fork			++-+
 
 File: swtch.s
-	savectx				----
+	savectx				+--+
 ```
 
 ## Important Data Structures
 
-### *proc* Structure
+### *proc* and *mdproc* Structures
 
 ```c
 /* From /sys/sys/proc.h */
@@ -158,6 +159,19 @@ struct	proc {
 #define	SSLEEP	3		/* Sleeping on an address. */
 #define	SSTOP	4		/* Process debugging or suspension. */
 #define	SZOMB	5		/* Awaiting collection by parent. */
+
+/* From /sys/i386/include/proc.h */
+
+/*
+ * Machine-dependent part of the proc structure for i386.
+ */
+struct mdproc {
+	int	md_flags;		/* machine-dependent flags */
+	int	*md_regs;		/* registers on current frame */
+};
+
+/* md_flags */
+#define	MDP_AST		0x0001	/* async trap pending */
 ```
 
 ### *pgrp* and *session* Structures
@@ -188,46 +202,7 @@ struct	pgrp {
 };
 ```
 
-### *user* Structure
-
-```c
-/* From /sys/sys/user.h */
-
-/*
- * Per process structure containing data that isn't needed in core
- * when the process isn't running (esp. when swapped out).
- * This structure may or may not be at the same kernel address
- * in all processes.
- */
-
-struct	user {
-	struct	pcb u_pcb;
-
-	struct	sigacts u_sigacts;	/* p_sigacts points here (use it!) */
-	struct	pstats u_stats;		/* p_stats points here (use it!) */
-
-	/*
-	 * Remaining fields only for core dump and/or ptrace--
-	 * not valid at other times!
-	 */
-	struct	kinfo_proc u_kproc;	/* proc + eproc */
-	struct	md_coredump u_md;	/* machine dependent glop */
-};
-
-/*
- * Redefinitions to make the debuggers happy for now...  This subterfuge
- * brought to you by coredump() and trace_req().  These fields are *only*
- * valid at those times!
- */
-#define	U_ar0	u_kproc.kp_proc.p_md.md_regs /* copy of curproc->p_md.md_regs */
-#define	U_tsize	u_kproc.kp_eproc.e_vm.vm_tsize
-#define	U_dsize	u_kproc.kp_eproc.e_vm.vm_dsize
-#define	U_ssize	u_kproc.kp_eproc.e_vm.vm_ssize
-#define	U_sig	u_sigacts.ps_sig
-#define	U_code	u_sigacts.ps_code
-```
-
-### *pcb* Structure
+### *user* and *pcb* Structures
 
 ```c
 /* From /sys/i386/include/pcb.h */
@@ -264,6 +239,41 @@ struct pcb {
 	long	pcb_sigc[8];	/* XXX signal code trampoline */
 	int	pad2;		/* XXX unused - remove it if you change struct */
 };
+
+/* From /sys/sys/user.h */
+
+/*
+ * Per process structure containing data that isn't needed in core
+ * when the process isn't running (esp. when swapped out).
+ * This structure may or may not be at the same kernel address
+ * in all processes.
+ */
+
+struct	user {
+	struct	pcb u_pcb;
+
+	struct	sigacts u_sigacts;	/* p_sigacts points here (use it!) */
+	struct	pstats u_stats;		/* p_stats points here (use it!) */
+
+	/*
+	 * Remaining fields only for core dump and/or ptrace--
+	 * not valid at other times!
+	 */
+	struct	kinfo_proc u_kproc;	/* proc + eproc */
+	struct	md_coredump u_md;	/* machine dependent glop */
+};
+
+/*
+ * Redefinitions to make the debuggers happy for now...  This subterfuge
+ * brought to you by coredump() and trace_req().  These fields are *only*
+ * valid at those times!
+ */
+#define	U_ar0	u_kproc.kp_proc.p_md.md_regs /* copy of curproc->p_md.md_regs */
+#define	U_tsize	u_kproc.kp_eproc.e_vm.vm_tsize
+#define	U_dsize	u_kproc.kp_eproc.e_vm.vm_dsize
+#define	U_ssize	u_kproc.kp_eproc.e_vm.vm_ssize
+#define	U_sig	u_sigacts.ps_sig
+#define	U_code	u_sigacts.ps_code
 ```
 
 ## Code Walkthrough
@@ -527,6 +537,212 @@ again:
 	return (0);
 }
 
+/*
+ * Implement fork's actions on an address space.
+ * Here we arrange for the address space to be copied or referenced,
+ * allocate a user struct (pcb and kernel stack), then call the
+ * machine-dependent layer to fill those in and make the new process
+ * ready to run.
+ * NOTE: the kernel stack may be at a different location in the child
+ * process, and thus addresses of automatic variables may be invalid
+ * after cpu_fork returns in the child process.  We do nothing here
+ * after cpu_fork returns.
+ */
+int
+vm_fork(p1, p2, isvfork)
+	register struct proc *p1, *p2;
+	int isvfork;
+{
+	register struct user *up;
+	vm_offset_t addr, ptaddr;
+	int error, i;
+	struct vm_map *map;
 
+	while ((cnt.v_free_count + cnt.v_cache_count) < cnt.v_free_min) {
+		VM_WAIT;
+	}
+	/*
+	 * avoid copying any of the parent's pagetables or other per-process
+	 * objects that reside in the map by marking all of them
+	 * non-inheritable
+	 */
+	(void) vm_map_inherit(&p1->p_vmspace->vm_map,
+		/*      EFC00000 - 2 * 4096    ,   EFFBF000 */
+	    UPT_MIN_ADDRESS - UPAGES * NBPG, VM_MAX_ADDRESS, VM_INHERIT_NONE);
+	p2->p_vmspace = vmspace_fork(p1->p_vmspace);
 
+#ifdef SYSVSHM
+	if (p1->p_vmspace->vm_shm)
+		shmfork(p1, p2, isvfork);
+#endif
+	/*
+	 * Allocate a wired-down (for now) pcb and kernel stack for the
+	 * process
+	 */
+	addr = (vm_offset_t) kstack;
+
+	map = &p2->p_vmspace->vm_map;
+
+	/* get new pagetables and kernel stack. */
+	error = vm_map_find(map, NULL, 0, &addr, UPT_MAX_ADDRESS - addr, FALSE);
+	if (error != KERN_SUCCESS)
+		panic("vm_fork: vm_map_find failed, addr=0x%x, error=%d", addr, error);
+
+	/* force in the page table encompassing the UPAGES */
+	ptaddr = trunc_page((u_int) vtopte(addr));
+	error = vm_map_pageable(map, ptaddr, ptaddr + NBPG, FALSE);
+	if (error)
+		panic("vm_fork: wire of PT failed. error=%d", error);
+
+	/* and force in (demand-zero) the UPAGES */
+	error = vm_map_pageable(map, addr, addr + UPAGES * NBPG, FALSE);
+	if (error)
+		panic("vm_fork: wire of UPAGES failed. error=%d", error);
+
+	/* get a kernel virtual address for the UPAGES for this proc */
+	up = (struct user *) kmem_alloc_pageable(u_map, UPAGES * NBPG);
+	if (up == NULL)
+		panic("vm_fork: u_map allocation failed");
+
+	/* and force-map the upages into the kernel pmap */
+	for (i = 0; i < UPAGES; i++)
+		pmap_enter(vm_map_pmap(u_map),
+		    ((vm_offset_t) up) + NBPG * i,
+		    pmap_extract(map->pmap, addr + NBPG * i),
+		    VM_PROT_READ | VM_PROT_WRITE, 1);
+
+	p2->p_addr = up;
+	/*
+	 * p_stats and p_sigacts currently point at fields in the user struct
+	 * but not at &u, instead at p_addr. Copy p_sigacts and parts of
+	 * p_stats; zero the rest of p_stats (statistics).
+	 */
+	p2->p_stats = &up->u_stats;
+	p2->p_sigacts = &up->u_sigacts;
+	up->u_sigacts = *p1->p_sigacts;
+	bzero(&up->u_stats.pstat_startzero,
+	    (unsigned) ((caddr_t) &up->u_stats.pstat_endzero -
+		(caddr_t) &up->u_stats.pstat_startzero));
+	bcopy(&p1->p_stats->pstat_startcopy, &up->u_stats.pstat_startcopy,
+	    ((caddr_t) &up->u_stats.pstat_endcopy -
+		(caddr_t) &up->u_stats.pstat_startcopy));
+
+	/*
+	 * cpu_fork will copy and update the kernel stack and pcb, and make
+	 * the child ready to run.  It marks the child so that it can return
+	 * differently than the parent. It returns twice, once in the parent
+	 * process and once in the child.
+	 */
+	return (cpu_fork(p1, p2));
+}
+
+/*
+ * Finish a fork operation, with process p2 nearly set up.
+ * Copy and update the kernel stack and pcb, making the child
+ * ready to run, and marking it so that it can return differently
+ * than the parent.  Returns 1 in the child process, 0 in the parent.
+ * We currently double-map the user area so that the stack is at the same
+ * address in each process; in the future we will probably relocate
+ * the frame pointers on the stack after copying.
+ */
+int
+cpu_fork(p1, p2)
+	register struct proc *p1, *p2;
+{
+	register struct user *up = p2->p_addr;
+	int offset;
+
+	/*
+	 * Copy pcb and stack from proc p1 to p2.
+	 * We do this as cheaply as possible, copying only the active
+	 * part of the stack.  The stack and pcb need to agree;
+	 * this is tricky, as the final pcb is constructed by savectx,
+	 * but its frame isn't yet on the stack when the stack is copied.
+	 * swtch compensates for this when the child eventually runs.
+	 * This should be done differently, with a single call
+	 * that copies and updates the pcb+stack,
+	 * replacing the bcopy and savectx.
+	 */
+	p2->p_addr->u_pcb = p1->p_addr->u_pcb;
+	offset = mvesp() - (int)kstack;
+	bcopy((caddr_t)kstack + offset, (caddr_t)p2->p_addr + offset,
+	    (unsigned) ctob(UPAGES) - offset);
+	p2->p_md.md_regs = p1->p_md.md_regs;
+
+	/*
+	 * #define PMAP_ACTIVATE(pmapp, pcbp) \
+	 * 		if ((pmapp) != NULL) { \
+	 * 			(pcbp)->pcb_cr3 = \
+	 * 				pmap_extract(kernel_pmap, (vm_offset_t)(pmapp)->pm_dir); \
+	 * 			if ((pmapp) == &curproc->p_vmspace->vm_pmap) \
+	 * 					load_cr3((pcbp)->pcb_cr3); \
+	 * 			(pmapp)->pm_pdchanged = FALSE; \
+	 * 	}
+	 */
+	pmap_activate(&p2->p_vmspace->vm_pmap, &up->u_pcb);
+	/*
+	 * Return (0) in parent, (1) in child.
+	 */
+	return (savectx(&up->u_pcb));
+}
+
+/*
+ * savectx(pcb)
+ * Update pcb, saving current processor state.
+ */
+ENTRY(savectx)
+	/* fetch PCB */
+	movl	4(%esp),%ecx
+
+	/* caller's return address - child won't execute this routine */
+	movl	(%esp),%eax
+	movl	%eax,PCB_EIP(%ecx)
+
+	movl	$1,PCB_EAX(%ecx)		/* return 1 in child */
+	movl	%ebx,PCB_EBX(%ecx)
+	movl	%esp,PCB_ESP(%ecx)
+	movl	%ebp,PCB_EBP(%ecx)
+	movl	%esi,PCB_ESI(%ecx)
+	movl	%edi,PCB_EDI(%ecx)
+
+#if NNPX > 0
+	/*
+	 * If npxproc == NULL, then the npx h/w state is irrelevant and the
+	 * state had better already be in the pcb.  This is true for forks
+	 * but not for dumps (the old book-keeping with FP flags in the pcb
+	 * always lost for dumps because the dump pcb has 0 flags).
+	 *
+	 * If npxproc != NULL, then we have to save the npx h/w state to
+	 * npxproc's pcb and copy it to the requested pcb, or save to the
+	 * requested pcb and reload.  Copying is easier because we would
+	 * have to handle h/w bugs for reloading.  We used to lose the
+	 * parent's npx state for forks by forgetting to reload.
+	 */
+	mov	_npxproc,%eax
+	testl	%eax,%eax
+	je	1f
+
+	pushl	%ecx
+	movl	P_ADDR(%eax),%eax
+	leal	PCB_SAVEFPU(%eax),%eax
+	pushl	%eax
+	pushl	%eax
+	call	_npxsave
+	popl	%eax
+	popl	%eax
+	popl	%ecx
+
+	pushl	%ecx
+	pushl	$108+8*2			/* XXX h/w state size + padding */
+	leal	PCB_SAVEFPU(%ecx),%ecx
+	pushl	%ecx
+	pushl	%eax
+	call	_bcopy
+	addl	$12,%esp
+	popl	%ecx
+#endif	/* NNPX > 0 */
+
+1:
+	xorl	%eax,%eax			/* return 0 */
+	ret
 ```
