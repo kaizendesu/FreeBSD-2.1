@@ -106,7 +106,6 @@
  * only manipulate the a_midmag field via the
  * N_SETMAGIC/N_GET{MAGIC,MID,FLAG} macros in a.out.h
  */
-
 struct exec {
      unsigned long	a_midmag;	/* flags<<26 | mid<<16 | magic */
      unsigned long	a_text;		/* text segment size */

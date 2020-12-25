@@ -58,14 +58,13 @@ exec_aout_imgact(iparams)
 	    ((a_out->a_magic >> 16) & 0xff) != 0)
                 return -1;
 #endif /* COMPAT_LINUX */
-
 	/*
 	 * Set file/virtual offset based on a.out variant.
 	 *	We do two cases: host byte order and network byte order
 	 *	(for NetBSD compatibility)
 	 */
 	switch ((int)(a_out->a_magic & 0xffff)) {
-	case ZMAGIC:
+	case ZMAGIC:/* = 0430 = 118h */
 		virtual_offset = 0;
 		if (a_out->a_text) {
 			file_offset = NBPG;
@@ -74,7 +73,7 @@ exec_aout_imgact(iparams)
 			file_offset = 0;
 		}
 		break;
-	case QMAGIC:
+	case QMAGIC:/* = 0314 = CCh */
 		virtual_offset = NBPG;
 		file_offset = 0;
 		break;
@@ -90,16 +89,13 @@ exec_aout_imgact(iparams)
 			return (-1);
 		}
 	}
-
 	bss_size = roundup(a_out->a_bss, NBPG);
-
 	/*
 	 * Check various fields in header for validity/bounds.
 	 */
 	if (/* entry point must lay with text region */
 	    a_out->a_entry < virtual_offset ||
 	    a_out->a_entry >= virtual_offset + a_out->a_text ||
-
 	    /* text and data size must each be page rounded */
 	    a_out->a_text % NBPG ||
 	    a_out->a_data % NBPG)
@@ -114,10 +110,8 @@ exec_aout_imgact(iparams)
 	 */
 	if (/* text can't exceed maximum text size */
 	    a_out->a_text > MAXTSIZ ||
-
 	    /* data + bss can't exceed maximum data size */
 	    a_out->a_data + bss_size > MAXDSIZ ||
-
 	    /* data + bss can't exceed rlimit */
 	    a_out->a_data + bss_size >
 		iparams->proc->p_rlimit[RLIMIT_DATA].rlim_cur)
@@ -127,28 +121,25 @@ exec_aout_imgact(iparams)
 	error = exec_extract_strings(iparams);
 	if (error)
 		return (error);
-
 	/*
 	 * Destroy old process VM and create a new one (with a new stack)
 	 */
 	exec_new_vmspace(iparams);
-
 	/*
 	 * Map text read/execute
 	 */
 	vmaddr = virtual_offset;
 	error =
-	    vm_mmap(&vmspace->vm_map,			/* map */
-		&vmaddr,				/* address */
-		a_out->a_text,				/* size */
-		VM_PROT_READ | VM_PROT_EXECUTE,		/* protection */
+	    vm_mmap(&vmspace->vm_map,						/* map */
+		&vmaddr,										/* address */
+		a_out->a_text,									/* size */
+		VM_PROT_READ | VM_PROT_EXECUTE,					/* protection */
 		VM_PROT_READ | VM_PROT_EXECUTE | VM_PROT_WRITE,	/* max protection */
-		MAP_PRIVATE | MAP_FIXED,		/* flags */
-		(caddr_t)iparams->vnodep,		/* vnode */
-		file_offset);				/* offset */
+		MAP_PRIVATE | MAP_FIXED,						/* flags */
+		(caddr_t)iparams->vnodep,						/* vnode */
+		file_offset);									/* offset */
 	if (error)
 		return (error);
-
 	/*
 	 * Map data read/write (if text is 0, assume text is in data area
 	 *	[Bill's screwball mode])

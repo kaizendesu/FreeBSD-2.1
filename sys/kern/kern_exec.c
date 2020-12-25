@@ -79,7 +79,6 @@ execve(p, uap, retval)
 	struct vattr attr;
 
 	imgp = &image_params;
-
 	/*
 	 * Initialize part of the common data
 	 */
@@ -92,11 +91,10 @@ execve(p, uap, retval)
 	imgp->vmspace_destroyed = 0;
 	imgp->interpreted = 0;
 	imgp->interpreter_name[0] = '\0';
-
 	/*
 	 * Allocate temporary demand zeroed space for argument and
 	 *	environment strings
-	 */
+	 *//* ARG_MAX = 65536 */
 	imgp->stringbase = (char *)kmem_alloc_wait(exec_map, ARG_MAX);
 	if (imgp->stringbase == NULL) {
 		error = ENOMEM;
@@ -104,7 +102,6 @@ execve(p, uap, retval)
 	}
 	imgp->stringp = imgp->stringbase;
 	imgp->stringspace = ARG_MAX;
-
 	/*
 	 * Translate the file name. namei() returns a vnode pointer
 	 *	in ni_vp amoung other things.
@@ -114,24 +111,20 @@ execve(p, uap, retval)
 	    UIO_USERSPACE, uap->fname, p);
 
 interpret:
-
 	error = namei(ndp);
 	if (error) {
 		kmem_free_wakeup(exec_map, (vm_offset_t)imgp->stringbase, ARG_MAX);
 		goto exec_fail;
 	}
-
 	imgp->vnodep = ndp->ni_vp;
 	if (imgp->vnodep == NULL) {
 		error = ENOEXEC;
 		goto exec_fail_dealloc;
 	}
-
 	/*
 	 * Check file permissions (also 'opens' file)
 	 */
 	error = exec_check_permissions(imgp);
-
 	/*
 	 * Lose the lock on the vnode. It's no longer needed, and must not
 	 * exist for the pagefault paging to work below.
@@ -145,19 +138,18 @@ interpret:
 	 * Map the image header (first page) of the file into
 	 *	kernel address space
 	 */
-	error = vm_mmap(kernel_map,			/* map */
+	error = vm_mmap(kernel_map,					/* map */
 			(vm_offset_t *)&imgp->image_header, /* address */
-			PAGE_SIZE,			/* size */
-			VM_PROT_READ, 			/* protection */
-			VM_PROT_READ, 			/* max protection */
-			0,	 			/* flags */
-			(caddr_t)imgp->vnodep,		/* vnode */
-			0);				/* offset */
+			PAGE_SIZE,							/* size */
+			VM_PROT_READ, 						/* protection */
+			VM_PROT_READ, 						/* max protection */
+			0,	 								/* flags */
+			(caddr_t)imgp->vnodep,				/* vnode */
+			0);									/* offset */
 	if (error) {
 		uprintf("mmap failed: %d\n",error);
 		goto exec_fail_dealloc;
 	}
-
 	/*
 	 * Loop through list of image activators, calling each one.
 	 *	If there is no match, the activator returns -1. If there
@@ -165,6 +157,8 @@ interpret:
 	 *	the error is returned. Otherwise 0 means success. If the
 	 *	image is interpreted, loop back up and try activating
 	 *	the interpreter.
+	 *
+	 *	execsw is a linker set where each item is a const struct execsw
 	 */
 	for (i = 0; execsw[i]; ++i) {
 		if (execsw[i]->ex_imgact)
@@ -176,6 +170,8 @@ interpret:
 			continue;
 		if (error)
 			goto exec_fail_dealloc;
+
+		/* Execve a shell script */
 		if (imgp->interpreted) {
 			/* free old vnode and name buffer */
 			vrele(ndp->ni_vp);
@@ -196,13 +192,11 @@ interpret:
 		error = ENOEXEC;
 		goto exec_fail_dealloc;
 	}
-
 	/*
 	 * Copy out strings (args and env) and initialize stack base
 	 */
 	stack_base = exec_copyout_strings(imgp);
 	p->p_vmspace->vm_minsaddr = (char *)stack_base;
-
 	/*
 	 * If custom stack fixup routine present for this process
 	 * let it do the stack setup.
@@ -223,17 +217,15 @@ interpret:
 	len = min(ndp->ni_cnd.cn_namelen,MAXCOMLEN);
 	bcopy(ndp->ni_cnd.cn_nameptr, p->p_comm, len);
 	p->p_comm[len] = 0;
-
 	/*
 	 * mark as executable, wakeup any process that was vforked and tell
 	 * it that it now has it's own resources back
-	 */
+	 *//* P_PPWAIT := parent waiting for child to execve/exit */
 	p->p_flag |= P_EXEC;
 	if (p->p_pptr && (p->p_flag & P_PPWAIT)) {
 		p->p_flag &= ~P_PPWAIT;
 		wakeup((caddr_t)p->p_pptr);
 	}
-
 	/*
 	 * Implement image setuid/setgid. Disallow if the process is
 	 * being traced.
@@ -243,6 +235,8 @@ interpret:
 		/*
 		 * Turn off syscall tracing for set-id programs, except for
 		 * root.
+		 *
+		 * suser returns EPERM, or equiv 1, if ucred is not su's
 		 */
 		if (p->p_tracep && suser(p->p_ucred, &p->p_acflag)) {
 			p->p_traceflag = 0;
@@ -263,13 +257,14 @@ interpret:
 		    p->p_ucred->cr_gid == p->p_cred->p_rgid)
 			p->p_flag &= ~P_SUGID;
 	}
-
 	/*
 	 * Implement correct POSIX saved-id behavior.
+	 *
+	 * In other words, save the actual uid of calling
+	 * process.
 	 */
 	p->p_cred->p_svuid = p->p_ucred->cr_uid;
 	p->p_cred->p_svgid = p->p_ucred->cr_gid;
-
 	/*
 	 * Store the vp for use in procfs
 	 */
@@ -277,11 +272,10 @@ interpret:
 		vrele(p->p_textvp);
 	VREF(ndp->ni_vp);
 	p->p_textvp = ndp->ni_vp;
-
 	/*
 	 * If tracing the process, trap to debugger so breakpoints
 	 * 	can be set before the program executes.
-	 */
+	 *//* P_TRACE := debugged proc being traced */
 	if (p->p_flag & P_TRACED)
 		psignal(p, SIGTRAP);
 
