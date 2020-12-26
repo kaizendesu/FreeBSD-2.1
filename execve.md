@@ -11,14 +11,14 @@
 
 ```txt
 execve
-	exec_aout_imgact
-		exec_extract_strings
-			fuword
-		exec_new_vmspace
-	exec_copyout_strings
-		suword
-	fdcloseexec
-	setregs
+    exec_aout_imgact
+        exec_extract_strings
+            fuword
+        exec_new_vmspace
+    exec_copyout_strings
+        suword
+    fdcloseexec
+    setregs
 ```
 
 ## Reading Checklist
@@ -33,23 +33,23 @@ where each function per filename is listed in the order that it is called.
 
 ```txt
 File: kern_exec.c
-	execve					++-+
-	exec_extract_strings	++--
-	exec_new_vmspace		++-+
-	exec_copyout_strings	----
+    execve                  ++-+
+    exec_extract_strings    ++--
+    exec_new_vmspace        ++-+
+    exec_copyout_strings    ----
 
 File: imgact_aout.c
-	exec_aout_imgact		++-+
+    exec_aout_imgact        ++-+
 
 File: support.s
-	fuword					++--
-	suword					++--
+    fuword                  ++--
+    suword                  ++--
 
 File: kern_descrip.c
-	fdcloseexec				++-+
+    fdcloseexec             ++-+
 
 File: machdep.c
-	setregs					++-+
+    setregs                 ++-+
 ```
 
 ## Important Data Structures
@@ -201,14 +201,14 @@ interpret:
 	 * Map the image header (first page) of the file into
 	 *	kernel address space
 	 */
-	error = vm_mmap(kernel_map,					/* map */
+	error = vm_mmap(kernel_map,                 /* map */
 			(vm_offset_t *)&imgp->image_header, /* address */
-			PAGE_SIZE,							/* size */
-			VM_PROT_READ, 						/* protection */
-			VM_PROT_READ, 						/* max protection */
-			0,	 								/* flags */
-			(caddr_t)imgp->vnodep,				/* vnode */
-			0);									/* offset */
+			PAGE_SIZE,                          /* size */
+			VM_PROT_READ,                       /* protection */
+			VM_PROT_READ,                       /* max protection */
+			0,                                  /* flags */
+			(caddr_t)imgp->vnodep,              /* vnode */
+			0);                                 /* offset */
 	if (error) {
 		uprintf("mmap failed: %d\n",error);
 		goto exec_fail_dealloc;
@@ -475,14 +475,14 @@ exec_aout_imgact(iparams)
 	 */
 	vmaddr = virtual_offset;
 	error =
-	    vm_mmap(&vmspace->vm_map,						/* map */
-		&vmaddr,										/* address */
-		a_out->a_text,									/* size */
-		VM_PROT_READ | VM_PROT_EXECUTE,					/* protection */
-		VM_PROT_READ | VM_PROT_EXECUTE | VM_PROT_WRITE,	/* max protection */
-		MAP_PRIVATE | MAP_FIXED,						/* flags */
-		(caddr_t)iparams->vnodep,						/* vnode */
-		file_offset);									/* offset */
+	    vm_mmap(&vmspace->vm_map,                       /* map */
+		&vmaddr,                                        /* address */
+		a_out->a_text,                                  /* size */
+		VM_PROT_READ | VM_PROT_EXECUTE,                 /* protection */
+		VM_PROT_READ | VM_PROT_EXECUTE | VM_PROT_WRITE, /* max protection */
+		MAP_PRIVATE | MAP_FIXED,                        /* flags */
+		(caddr_t)iparams->vnodep,                       /* vnode */
+		file_offset);                                   /* offset */
 	if (error)
 		return (error);
 	/*

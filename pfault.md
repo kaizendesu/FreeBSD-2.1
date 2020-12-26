@@ -11,61 +11,61 @@
 
 ```txt
 _alltraps
-	trap
-		trap_pfault
-			vm_map_pmap
-			vm_fault
-				vm_map_lookup
-					vm_map_lookup_entry
-					vm_object_shadow
-				vnode_pager_lock
-				vm_page_lookup
-				vm_page_unqueue
-				vm_page_activate
-				vm_pager_has_page
-					swap_pager_haspage
-					_swap_pager_haspage
-					vnode_pager_haspage
-						incore
-				vm_page_alloc
-					vm_page_remove
-					vm_page_insert
-				vm_fault_additional_pages
-					vm_fault_page_lookup
-				vm_pager_get_pages
-					vm_page_free
-					vnode_pager_getpage
-						vnode_pager_input
-							vnode_pager_freepage
-							vnode_pager_input_smlfs
-								vm_pager_map_page
-									kmem_alloc_wait
-									pmap_kenter
-								vm_page_bits
-								vnode_pager_addr
-									getpbuf
-									ufs_bmap
-										ufs_bmaparray
-											ufs_getlbns
-								ufs_strategy
-									wdstrategy
-								relpbuf
-								vm_pager_unmap_page
-									pmap_kremove
-									kmem_free_wakeup
-				vm_page_zero_fill
-					pmap_zero_page
-						pmap_update
-				vm_page_copy
-					pmap_copy_page
-						pmap_update
-				vm_object_collapse
-				pmap_enter
-				vm_page_wire
-				vm_page_unwire
-			pmap_use_pt
-			pmap_unuse_pt
-	userret
+    trap
+        trap_pfault
+            vm_map_pmap
+            vm_fault
+                vm_map_lookup
+                    vm_map_lookup_entry
+                    vm_object_shadow
+                vnode_pager_lock
+                vm_page_lookup
+                vm_page_unqueue
+                vm_page_activate
+                vm_pager_has_page
+                    swap_pager_haspage
+                    _swap_pager_haspage
+                    vnode_pager_haspage
+                        incore
+                vm_page_alloc
+                    vm_page_remove
+                    vm_page_insert
+                vm_fault_additional_pages
+                    vm_fault_page_lookup
+                vm_pager_get_pages
+                    vm_page_free
+                    vnode_pager_getpage
+                        vnode_pager_input
+                            vnode_pager_freepage
+                            vnode_pager_input_smlfs
+                                vm_pager_map_page
+                                    kmem_alloc_wait
+                                    pmap_kenter
+                                vm_page_bits
+                                vnode_pager_addr
+                                    getpbuf
+                                    ufs_bmap
+                                        ufs_bmaparray
+                                            ufs_getlbns
+                                ufs_strategy
+                                    wdstrategy
+                                relpbuf
+                                vm_pager_unmap_page
+                                    pmap_kremove
+                                    kmem_free_wakeup
+                vm_page_zero_fill
+                    pmap_zero_page
+                        pmap_update
+                vm_page_copy
+                    pmap_copy_page
+                        pmap_update
+                vm_object_collapse
+                pmap_enter
+                vm_page_wire
+                vm_page_unwire
+            pmap_use_pt
+            pmap_unuse_pt
+    userret
 ```
 
 ## Reading Checklist
@@ -80,90 +80,90 @@ where each function per filename is listed in the order that it is called.
 
 ```txt
 File: exception.s
-	_alltraps					++--
+    _alltraps                    ++--
 
 File: trap.c
-	trap						++--
-	trap_pfault					++-+
-	userret						++--
+    trap                        ++--
+    trap_pfault                 ++-+
+    userret                     ++--
 
 File: vm_fault.c
-	vm_fault					++--
-	vm_fault_additional_pages	+---
-	vm_fault_page_lookup		++--
+    vm_fault                    ++--
+    vm_fault_additional_pages   +---
+    vm_fault_page_lookup        ++--
 
 File: vm_map.c
-	vm_map_lookup				++--
-	vm_map_lookup_entry			++--
+    vm_map_lookup               ++--
+    vm_map_lookup_entry         ++--
 
 File: vm_object.c
-	vm_object_shadow			++--
-	vm_object_collapse			----
+    vm_object_shadow            ++--
+    vm_object_collapse          ----
 
 File: vm_page.c
-	vm_page_lookup				++--
-	vm_page_alloc				++--
-	vm_page_remove				++--
-	vm_page_insert				++--
-	vm_page_unqueue				++--
-	vm_page_activate			----
-	vm_page_deactivate			----
-	vm_page_alloc				++--
-	vm_page_free				++--
-	vm_page_zero_fill			++--
-	vm_page_copy				++--
-	vm_page_bits				+---
-	vm_page_wire				----
-	vm_page_unwire				----
+    vm_page_lookup              ++--
+    vm_page_alloc               ++--
+    vm_page_remove              ++--
+    vm_page_insert              ++--
+    vm_page_unqueue             ++--
+    vm_page_activate            ----
+    vm_page_deactivate          ----
+    vm_page_alloc               ++--
+    vm_page_free                ++--
+    vm_page_zero_fill           ++--
+    vm_page_copy                ++--
+    vm_page_bits                +---
+    vm_page_wire                ----
+    vm_page_unwire              ----
 
 File: vm_pager.c
-	vm_pager_has_page			++--
-	vm_pager_get_pages			++-+
-	getpbuf						++--
-	relpbuf						++--
-	vm_pager_map_page			++--
-	vm_pager_unmap_page			++--
+    vm_pager_has_page           ++--
+    vm_pager_get_pages          ++-+
+    getpbuf                     ++--
+    relpbuf                     ++--
+    vm_pager_map_page           ++--
+    vm_pager_unmap_page         ++--
 
 File: vnode_pager.c
-	vnode_pager_lock			++--
-	vnode_pager_getpage			++-+
-	vnode_pager_input			++-+
-	vnode_pager_input_smlfs		++-+
-	vnode_pager_freepage		++--
-	vnode_pager_addr			++--
+    vnode_pager_lock            ++--
+    vnode_pager_getpage         ++-+
+    vnode_pager_input           ++-+
+    vnode_pager_input_smlfs     ++-+
+    vnode_pager_freepage        ++--
+    vnode_pager_addr            ++--
 
 File: vfs_bio.c
-	incore						++--
+    incore                      ++--
 
 File: vfs_subr.c
-	pbgetvp						++--
-	pbrelvp						----
+    pbgetvp                     ++--
+    pbrelvp                     ----
 
 File: vm_kern.c
-	kmem_alloc_wait				++--
-	kmem_free_wakeup			++--
+    kmem_alloc_wait             ++--
+    kmem_free_wakeup            ++--
 
 File: ufs_bmap.c
-	ufs_bmap					++--
-	ufs_bmaparray				++--
+    ufs_bmap                    ++--
+    ufs_bmaparray               ++--
 
 File: ufs_vnops
-	ufs_strategy				++-+
+    ufs_strategy                ++-+
 
 File: wd.c
-	wdstrategy					++-+
+    wdstrategy                  ++-+
 
 File: pmap.c
-	pmap_zero_page				++--
-	pmap_copy_page				++--
-	pmap_kenter					++--
-	pmap_kremove				++--
-	pmap_enter					++-+
-	pmap_use_pt					++--
-	pmap_unuse_pt				----
+    pmap_zero_page              ++--
+    pmap_copy_page              ++--
+    pmap_kenter                 ++--
+    pmap_kremove                ++--
+    pmap_enter                  ++-+
+    pmap_use_pt                 ++--
+    pmap_unuse_pt               ----
 
 File: cpufunc.h
-	pmap_update					++--
+	pmap_update                 ++--
 ```
 
 ## Important Data Structures

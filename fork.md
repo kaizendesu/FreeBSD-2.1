@@ -11,9 +11,9 @@
 
 ```txt
 fork1
-	vm_fork
-		cpu_fork
-			savectx
+    vm_fork
+        cpu_fork
+            savectx
 ```
 
 ## Reading Checklist
@@ -28,16 +28,16 @@ where each function per filename is listed in the order that it is called.
 
 ```txt
 File: kern_fork.c
-	fork1				++-+
+    fork1               ++-+
 
 File: vm_glue.c
-	vm_fork				++-+
+    vm_fork             ++-+
 
 File: vm_machdep.c
-	cpu_fork			++-+
+    cpu_fork            ++-+
 
 File: swtch.s
-	savectx				+--+
+    savectx             +--+
 ```
 
 ## Important Data Structures

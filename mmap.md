@@ -11,35 +11,35 @@
 
 ```txt
 mmap
-	vm_mmap
-		ufs_getattr
-		vm_pager_allocate
-			vnode_pager_alloc
-				vm_object_allocate
-					_vm_object_allocate
-				vm_object_enter
-		vm_object_lookup
-		vm_object_deallocate
-			vm_object_remove			(bonus)
-			vm_object_terminate			(bonus)
-				_vm_object_page_clean	(bonus)
-		vm_map_find
-			vm_map_findspace
-				vm_map_lookup_entry
-			vm_map_insert
-				vm_map_entry_create
-				vm_map_entry_link
-		vm_object_pmap_copy
-		pmap_object_init_pt
-			vm_page_lookup
-			pmap_enter_quick
-				pmap_remove
-				get_pv_entry
-				pmap_use_pt
-					pmap_pte_vm_page
-		vm_map_protect
-			pmap_protect
-		vm_map_inherit
+    vm_mmap
+        ufs_getattr
+        vm_pager_allocate
+            vnode_pager_alloc
+                vm_object_allocate
+                    _vm_object_allocate
+                vm_object_enter
+        vm_object_lookup
+        vm_object_deallocate
+            vm_object_remove            (bonus)
+            vm_object_terminate         (bonus)
+                _vm_object_page_clean   (bonus)
+        vm_map_find
+            vm_map_findspace
+                vm_map_lookup_entry
+            vm_map_insert
+                vm_map_entry_create
+                vm_map_entry_link
+        vm_object_pmap_copy
+        pmap_object_init_pt
+            vm_page_lookup
+            pmap_enter_quick
+                pmap_remove
+                get_pv_entry
+                pmap_use_pt
+                    pmap_pte_vm_page
+        vm_map_protect
+            pmap_protect
+        vm_map_inherit
 ```
 
 ## Reading Checklist
@@ -54,50 +54,50 @@ where each function per filename is listed in the order that it is called.
 
 ```txt
 File: vm_mmap.c
-	mmap					++-+
-	vm_mmap					++-+
+    mmap                    ++-+
+    vm_mmap                 ++-+
 
 File: ufs_vnops.c
-	ufs_getattr				++--
+    ufs_getattr             ++--
 
 File: vm_pager.c
-	vm_pager_allocate		++--
+    vm_pager_allocate       ++--
 
 File: vnode_pager.c
-	vnode_pager_alloc		++--
+    vnode_pager_alloc       ++--
 
 File: vm_object.c
-	vm_object_allocate		++--
-	_vm_object_allocate		++--
-	vm_object_enter			+---
-	vm_object_lookup		+---
-	vm_object_deallocate	+---
-	vm_object_remove		----
-	vm_object_terminate		----
-	_vm_object_page_clean	----
-	vm_object_pmap_copy		++--
+    vm_object_allocate      ++--
+    _vm_object_allocate     ++--
+    vm_object_enter         +---
+    vm_object_lookup        +---
+    vm_object_deallocate    +---
+    vm_object_remove        ----
+    vm_object_terminate     ----
+    _vm_object_page_clean   ----
+    vm_object_pmap_copy     ++--
 
 File: vm_map.c
-	vm_map_find				++--
-	vm_map_findspace		++--
-	vm_map_lookup_entry		++--
-	vm_map_insert			++--
-	vm_map_entry_create		+---
-	vm_map_entry_link		++--
-	vm_map_protect			----
-	vm_map_inherit			----
+    vm_map_find             ++--
+    vm_map_findspace        ++--
+    vm_map_lookup_entry     ++--
+    vm_map_insert           ++--
+    vm_map_entry_create     +---
+    vm_map_entry_link       ++--
+    vm_map_protect          ----
+    vm_map_inherit          ----
 
 File: pmap.c
-	pmap_object_init_pt		++--
-	pmap_enter_quick		++--
-	pmap_remove				+---
-	get_pv_entry			++--
-	pmap_use_pt				++--
-	pmap_pte_vm_page		++--
-	pmap_protect			----
+    pmap_object_init_pt     ++--
+    pmap_enter_quick        ++--
+    pmap_remove             +---
+    get_pv_entry            ++--
+    pmap_use_pt             ++--
+    pmap_pte_vm_page        ++--
+    pmap_protect            ----
 
 File: vm_page.c
-	vm_page_lookup			++--
+    vm_page_lookup          ++--
 ```
 
 ## Important Data Structures

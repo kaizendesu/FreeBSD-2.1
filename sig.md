@@ -11,10 +11,10 @@
 
 ```txt
 kill
-	pfind
-	psignal
-		sigmask
-		sigprop
+    pfind
+    psignal
+        sigmask
+        sigprop
 ```
 
 ## Reading Checklist
@@ -29,11 +29,11 @@ where each function per filename is listed in the order that it is called.
 
 ```txt
 File: kern_sig.c
-	kill			++-+
-	psignal			++-+
+    kill            ++-+
+    psignal         ++-+
 
 File: kern_proc.c
-	pfind			++--
+    pfind           ++--
 ```
 
 ## Important Data Structures
