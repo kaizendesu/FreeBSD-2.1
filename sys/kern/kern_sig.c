@@ -685,14 +685,15 @@ psignal(p, signum)
 
 	if ((u_int)signum >= NSIG || signum == 0)
 		panic("psignal signal number");
+
+	/* sigmask(m) (1 << ((m)-1)) */
 	mask = sigmask(signum);
 	prop = sigprop[signum];
-
 	/*
 	 * If proc is traced, always give parent a chance.
 	 */
 	if (p->p_flag & P_TRACED)
-		action = SIG_DFL;
+		action = SIG_DFL;	/* action = (void (*)(int))0  */
 	else {
 		/*
 		 * If the signal is being ignored,
@@ -700,21 +701,22 @@ psignal(p, signum)
 		 * (Note: we don't set SIGCONT in p_sigignore,
 		 * and if it is set to SIG_IGN,
 		 * action will be SIG_DFL here.)
-		 */
+		 *//* p_sigignore means ignoring all signals */
 		if (p->p_sigignore & mask)
 			return;
 		if (p->p_sigmask & mask)
-			action = SIG_HOLD;
+			action = SIG_HOLD;	/* action = (void (*)())3 */
 		else if (p->p_sigcatch & mask)
-			action = SIG_CATCH;
+			action = SIG_CATCH;	/* action = (void (*)())2 */
 		else
 			action = SIG_DFL;
 	}
-
+	/* Update the nice value for kill signals with default actions */
 	if (p->p_nice > NZERO && action == SIG_DFL && (prop & SA_KILL) &&
 	    (p->p_flag & P_TRACED) == 0)
 		p->p_nice = NZERO;
 
+	/* Clear stop flags for SIGCONT */
 	if (prop & SA_CONT)
 		p->p_siglist &= ~stopsigmask;
 
@@ -730,8 +732,8 @@ psignal(p, signum)
 		        return;
 		p->p_siglist &= ~contsigmask;
 	}
+	/* Add the signal to the pending list */
 	p->p_siglist |= mask;
-
 	/*
 	 * Defer further processing for signals which are held,
 	 * except that stopped processes must be continued by SIGCONT.
@@ -798,7 +800,6 @@ psignal(p, signum)
 		 */
 		if (p->p_flag & P_TRACED)
 			goto out;
-
 		/*
 		 * Kill signal always sets processes running.
 		 */
@@ -834,7 +835,6 @@ psignal(p, signum)
 			p->p_siglist &= ~mask;		/* take it away */
 			goto out;
 		}
-
 		/*
 		 * If process is sleeping interruptibly, then simulate a
 		 * wakeup so that when it is continued, it will be made
