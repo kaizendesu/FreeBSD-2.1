@@ -340,17 +340,23 @@ exec_new_vmspace(imgp)
 	if (vmspace->vm_shm)
 		shmexit(imgp->proc);
 #endif
+	/* Remove everything up to the top of the kernel stack */
 	vm_map_remove(&vmspace->vm_map, 0, USRSTACK);
 
 	/* Allocate a new stack */
 	error = vm_map_find(&vmspace->vm_map, NULL, 0, (vm_offset_t *)&stack_addr,
+	/*  SGROWSIZ = 128UL * 1024 */
 	    SGROWSIZ, FALSE);
 	if (error)
 		return(error);
 
 	vmspace->vm_ssize = SGROWSIZ >> PAGE_SHIFT;
 
-	/* Initialize maximum stack address */
+	/*
+	 * Initialize maximum stack address 
+	 * 
+	 * MAXSSIZ := 64UL * 1024 * 1024
+	 */
 	vmspace->vm_maxsaddr = (char *)USRSTACK - MAXSSIZ;
 
 	return(0);
@@ -371,7 +377,6 @@ exec_extract_strings(imgp)
 	/*
 	 * extract arguments first
 	 */
-
 	argv = imgp->uap->argv;
 
 	if (argv) {
@@ -389,11 +394,9 @@ exec_extract_strings(imgp)
 			imgp->argc++;
 		}
 	}
-
 	/*
 	 * extract environment strings
 	 */
-
 	envv = imgp->uap->envv;
 
 	if (envv) {
@@ -411,7 +414,6 @@ exec_extract_strings(imgp)
 			imgp->envc++;
 		}
 	}
-
 	return (0);
 }
 

@@ -561,7 +561,7 @@ ALTENTRY(fuiword)
 ENTRY(fuword)
 	movl	_curpcb,%ecx
 	movl	$fusufault,PCB_ONFAULT(%ecx)
-	movl	4(%esp),%edx			/* from */
+	movl	4(%esp),%edx				/* from */
 
 	cmpl	$VM_MAXUSER_ADDRESS-4,%edx	/* verify address is valid */
 	ja	fusufault

@@ -1015,6 +1015,7 @@ setregs(p, entry, stack)
 	bzero(regs, sizeof(struct trapframe));
 	regs[tEIP] = entry;
 	regs[tESP] = stack;
+	/* PSL_T = trace enable bit */
 	regs[tEFLAGS] = PSL_USER | (regs[tEFLAGS] & PSL_T);
 	regs[tSS] = _udatasel;
 	regs[tDS] = _udatasel;
@@ -1022,6 +1023,8 @@ setregs(p, entry, stack)
 	regs[tCS] = _ucodesel;
 
 	p->p_addr->u_pcb.pcb_flags = 0;	/* no fp at all */
+
+	/* Reload cr0 reg with task-switch bit set */
 	load_cr0(rcr0() | CR0_TS);	/* start emulating */
 #if	NNPX > 0
 	npxinit(__INITIAL_NPXCW__);

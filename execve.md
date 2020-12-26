@@ -13,6 +13,7 @@
 execve
 	exec_aout_imgact
 		exec_extract_strings
+			fuword
 		exec_new_vmspace
 	exec_copyout_strings
 		suword
@@ -34,20 +35,21 @@ where each function per filename is listed in the order that it is called.
 File: kern_exec.c
 	execve					++-+
 	exec_extract_strings	++--
-	exec_new_vmspace		----
+	exec_new_vmspace		++-+
 	exec_copyout_strings	----
 
 File: imgact_aout.c
 	exec_aout_imgact		++-+
 
 File: support.s
-	suword					----
+	fuword					++--
+	suword					++--
 
 File: kern_descrip.c
-	fdcloseexec				----
+	fdcloseexec				++-+
 
 File: machdep.c
-	setregs					----
+	setregs					++-+
 ```
 
 ## Important Data Structures
@@ -529,5 +531,105 @@ exec_aout_imgact(iparams)
 	return (0);
 }
 
+/*
+ * Destroy old address space, and allocate a new stack
+ *	The new stack is only SGROWSIZ large because it is grown
+ *	automatically in trap.c.
+ */
+int
+exec_new_vmspace(imgp)
+	struct image_params *imgp;
+{
+	int error;
+	struct vmspace *vmspace = imgp->proc->p_vmspace;
+	caddr_t	stack_addr = (caddr_t) (USRSTACK - SGROWSIZ);
 
+	imgp->vmspace_destroyed = 1;
+
+	/* Blow away entire process VM */
+#ifdef SYSVSHM
+	if (vmspace->vm_shm)
+		shmexit(imgp->proc);
+#endif
+	/* Remove everything up to the top of the kernel stack */
+	vm_map_remove(&vmspace->vm_map, 0, USRSTACK);
+
+	/* Allocate a new stack */
+	error = vm_map_find(&vmspace->vm_map, NULL, 0, (vm_offset_t *)&stack_addr,
+	/*  SGROWSIZ = 128UL * 1024 */
+	    SGROWSIZ, FALSE);
+	if (error)
+		return(error);
+
+	vmspace->vm_ssize = SGROWSIZ >> PAGE_SHIFT;
+
+	/*
+	 * Initialize maximum stack address 
+	 * 
+	 * MAXSSIZ := 64UL * 1024 * 1024
+	 */
+	vmspace->vm_maxsaddr = (char *)USRSTACK - MAXSSIZ;
+
+	return(0);
+}
+
+/*
+ * Close any files on exec?
+ */
+void
+fdcloseexec(p)
+	struct proc *p;
+{
+	struct filedesc *fdp = p->p_fd;
+	struct file **fpp;
+	char *fdfp;
+	register int i;
+
+	fpp = fdp->fd_ofiles;
+	fdfp = fdp->fd_ofileflags;
+	for (i = 0; i <= fdp->fd_lastfile; i++, fpp++, fdfp++)
+		/* UF_EXCLOSE := auto-close on exec */
+		if (*fpp != NULL && (*fdfp & UF_EXCLOSE)) {
+			if (*fdfp & UF_MAPPED)
+				(void) munmapfd(p, i);
+			(void) closef(*fpp, p);
+			*fpp = NULL;
+			*fdfp = 0;
+			/* Update first freefile hint */
+			if (i < fdp->fd_freefile)
+				fdp->fd_freefile = i;
+		}
+	while (fdp->fd_lastfile > 0 && fdp->fd_ofiles[fdp->fd_lastfile] == NULL)
+		fdp->fd_lastfile--;
+}
+
+/*
+ * Clear registers on exec
+ */
+void
+setregs(p, entry, stack)
+	struct proc *p;
+	u_long entry;
+	u_long stack;
+{
+	int *regs = p->p_md.md_regs;
+
+	bzero(regs, sizeof(struct trapframe));
+	regs[tEIP] = entry;
+	regs[tESP] = stack;
+	/* PSL_T = trace enable bit */
+	regs[tEFLAGS] = PSL_USER | (regs[tEFLAGS] & PSL_T);
+	regs[tSS] = _udatasel;
+	regs[tDS] = _udatasel;
+	regs[tES] = _udatasel;
+	regs[tCS] = _ucodesel;
+
+	p->p_addr->u_pcb.pcb_flags = 0;	/* no fp at all */
+
+	/* Reload cr0 reg with task-switch bit set */
+	load_cr0(rcr0() | CR0_TS);	/* start emulating */
+#if	NNPX > 0
+	npxinit(__INITIAL_NPXCW__);
+#endif	/* NNPX > 0 */
+}
 ```

@@ -739,12 +739,14 @@ fdcloseexec(p)
 	fpp = fdp->fd_ofiles;
 	fdfp = fdp->fd_ofileflags;
 	for (i = 0; i <= fdp->fd_lastfile; i++, fpp++, fdfp++)
+		/* UF_EXCLOSE := auto-close on exec */
 		if (*fpp != NULL && (*fdfp & UF_EXCLOSE)) {
 			if (*fdfp & UF_MAPPED)
 				(void) munmapfd(p, i);
 			(void) closef(*fpp, p);
 			*fpp = NULL;
 			*fdfp = 0;
+			/* Update first freefile hint */
 			if (i < fdp->fd_freefile)
 				fdp->fd_freefile = i;
 		}
