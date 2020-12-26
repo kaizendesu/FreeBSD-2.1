@@ -163,7 +163,7 @@ File: pmap.c
     pmap_unuse_pt               ----
 
 File: cpufunc.h
-	pmap_update                 ++--
+    pmap_update                 ++--
 ```
 
 ## Important Data Structures
