@@ -234,10 +234,12 @@ updatepri(p)
 	register unsigned int newcpu = p->p_estcpu;
 	register fixpt_t loadfac = loadfactor(averunnable.ldavg[0]);
 
+	/* Decay p_estcpu to 0 */
 	if (p->p_slptime > 5 * loadfac)
 		p->p_estcpu = 0;
 	else {
 		p->p_slptime--;	/* the first time was done in schedcpu */
+		/* Consult textbook to understand decay algo */
 		while (newcpu && --p->p_slptime)
 			newcpu = (int) decay_cpu(loadfac, newcpu);
 		p->p_estcpu = min(newcpu, UCHAR_MAX);
@@ -477,10 +479,17 @@ unsleep(p)
 
 	s = splhigh();
 	if (p->p_wchan) {
+		/* hp is the addr of the proc ptr */
 		hp = &(qp = &slpque[LOOKUP(p->p_wchan)])->sq_head;
+
+		/* Find p in the slp que */
 		while (*hp != p)
 			hp = &(*hp)->p_forw;
+
+		/* Remove p from the que */
 		*hp = p->p_forw;
+
+		/* Update the tail ptr of the que */
 		if (qp->sq_tailp == &p->p_forw)
 			qp->sq_tailp = hp;
 		p->p_wchan = 0;
@@ -510,6 +519,7 @@ restart:
 #endif
 		if (p->p_wchan == ident) {
 			p->p_wchan = 0;
+			/* Remove curr entry */
 			*q = p->p_forw;
 			if (qp->sq_tailp == &p->p_forw)
 				qp->sq_tailp = q;
@@ -531,6 +541,10 @@ restart:
 				else
 					need_resched();
 				/* END INLINE EXPANSION */
+				/*
+				 * We can jump here because we already
+				 * incremented q above.
+				 */
 				goto restart;
 			}
 		} else
@@ -650,6 +664,13 @@ setrunnable(p)
 	if ((p->p_flag & P_INMEM) == 0)
 		wakeup((caddr_t)&proc0);
 	else if (p->p_priority < curpriority)
+		/*
+		 * #define need_resched() { \
+		 *    want_resched = 1; aston();}
+		 *
+		 * want_resched is a global var defined
+		 * in swtch.s
+		 */
 		need_resched();
 }
 
@@ -671,6 +692,7 @@ resetpriority(p)
 		if (newpriority < curpriority)
 			need_resched();
 	} else {
+		/* We only call this for idle/rt procs */
 		need_resched();
 	}
 }

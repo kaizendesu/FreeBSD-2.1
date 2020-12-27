@@ -80,14 +80,20 @@ _want_resched:	.long	0			/* we need to re-run the scheduler */
  * Call should be made at spl6(), and p->p_stat should be SRUN
  */
 ENTRY(setrunqueue)
-	movl	4(%esp),%eax
-	cmpl	$0,P_BACK(%eax)			/* should not be on q already */
-	je	set1
+	movl	4(%esp),%eax		/* %eax = p */
+/*
+ * From genassym.c:
+ *  printf("#define\tP_BACK %p\n", &p->p_back)
+ *
+ * p->p_back is a ptr on the run/sleep queues
+ */
+	cmpl	$0,P_BACK(%eax)		/* should not be on q already */
+	je	set1					/* jmp if not on run que */
 	pushl	$set2
-	call	_panic
+	call	_panic				/* panic("setrunqueue") */
 set1:
 	cmpw	$RTP_PRIO_NORMAL,P_RTPRIO_TYPE(%eax) /* normal priority process? */
-	je	set_nort
+	je	set_nort				/* jmp if normal proc */
 
 	movzwl	P_RTPRIO_PRIO(%eax),%edx
 
@@ -116,17 +122,24 @@ set_id:
 	movl	%eax,P_FORW(%ecx)
 	ret
 
-set_nort:                    			/*  Normal (RTOFF) code */
-	movzbl	P_PRI(%eax),%edx
-	shrl	$2,%edx
-	btsl	%edx,_whichqs			/* set q full bit */
-	shll	$3,%edx
+/* _whichqs: .long 0  /* which run queues have data */
+set_nort:                    	/*  Normal (RTOFF) code */
+	movzbl	P_PRI(%eax),%edx	/* %edx = p->priority */
+/*
+ * Process priorities range from 0 - 127 and freeBSD uses 32
+ * run queues. Hence, in order to identify the proc's runque
+ * we simply divide by 4 via shrl.
+ */
+	shrl	$2,%edx				/* divide prio by 4 for runque nb*/
+	btsl	%edx,_whichqs		/* set q full bit */
+	shll	$3,%edx				/* mult runque by 8 for offset */
 	addl	$_qs,%edx			/* locate q hdr */
-	movl	%edx,P_FORW(%eax)		/* link process on tail of q */
-	movl	P_BACK(%edx),%ecx
-	movl	%ecx,P_BACK(%eax)
-	movl	%eax,P_BACK(%edx)
-	movl	%eax,P_FORW(%ecx)
+	movl	%edx,P_FORW(%eax)	/* link process on tail of q */
+								/* p->forw = q */
+	movl	P_BACK(%edx),%ecx	/* %ecx = q->p_back */
+	movl	%ecx,P_BACK(%eax)	/* p->p_back = q->p_back */
+	movl	%eax,P_BACK(%edx)	/* q->p_back = p */
+	movl	%eax,P_FORW(%ecx)	/* q->p_back->p_forw = p */
 	ret
 
 set2:	.asciz	"setrunqueue"

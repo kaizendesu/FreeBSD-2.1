@@ -13,8 +13,13 @@
 kill
     pfind
     psignal
-        sigmask
-        sigprop
+        setrunnable
+            unsleep
+            setrunqueue
+            updatepri
+                resetpriority
+            wakeup
+            need_resched
 ```
 
 ## Reading Checklist
@@ -34,6 +39,16 @@ File: kern_sig.c
 
 File: kern_proc.c
     pfind           ++--
+
+File: kern_synch.c
+    setrunnable     ++-+
+    unsleep         ++--
+    updatepri       ++--
+    resetpriority   ++--
+	wakeup          ++-+
+
+File: swtch.s
+    setrunqueue     ++-+
 ```
 
 ## Important Data Structures
@@ -79,6 +94,24 @@ int sigprop[NSIG + 1] = {
 #define	contsigmask	(sigmask(SIGCONT))
 #define	stopsigmask	(sigmask(SIGSTOP) | sigmask(SIGTSTP) | \
 			    sigmask(SIGTTIN) | sigmask(SIGTTOU))
+```
+
+### *slpque* Structure
+
+```c
+/* From /sys/kern/kern_synch.c */
+
+/*
+ * We're only looking at 7 bits of the address; everything is
+ * aligned to 4, lots of things are aligned to greater powers
+ * of 2.  Shift right by 8, i.e. drop the bottom 256 worth.
+ */
+#define TABLESIZE	128
+#define LOOKUP(x)	(((int)(x) >> 8) & (TABLESIZE - 1))
+struct slpque {
+	struct proc *sq_head;
+	struct proc **sq_tailp;
+} slpque[TABLESIZE];
 ```
 
 ## Code Walkthrough
@@ -146,7 +179,13 @@ psignal(p, signum)
 	if ((u_int)signum >= NSIG || signum == 0)
 		panic("psignal signal number");
 
-	/* sigmask(m) (1 << ((m)-1)) */
+	/*
+	 * #define sigmask(m) (1 << ((m)-1))
+	 *
+	 * Example: SIGKILL, the 9th signal.
+	 *
+	 *   mask = sigmask(9) = (1 << 8) = 256 
+	 */
 	mask = sigmask(signum);
 	prop = sigprop[signum];
 	/*
@@ -332,4 +371,174 @@ run:
 out:
 	splx(s);
 }
+
+/*
+ * Change process state to be runnable,
+ * placing it on the run queue if it is in memory,
+ * and awakening the swapper if it isn't in memory.
+ */
+void
+setrunnable(p)
+	register struct proc *p;
+{
+	register int s;
+
+	s = splhigh();
+	switch (p->p_stat) {
+	case 0:
+	case SRUN:
+	case SZOMB:
+	default:
+		panic("setrunnable");
+	case SSTOP:
+	case SSLEEP:
+		unsleep(p);		/* e.g. when sending signals */
+		break;
+
+	case SIDL:
+		break;
+	}
+	p->p_stat = SRUN;
+	if (p->p_flag & P_INMEM)
+		setrunqueue(p);
+	splx(s);
+	if (p->p_slptime > 1)
+		updatepri(p);
+	p->p_slptime = 0;
+	if ((p->p_flag & P_INMEM) == 0)
+		wakeup((caddr_t)&proc0);
+	else if (p->p_priority < curpriority)
+		/*
+		 * #define need_resched() { \
+		 *    want_resched = 1; aston();}
+		 *
+		 * want_resched is a global var defined
+		 * in swtch.s
+		 */
+		need_resched();
+}
+
+/*
+ * Make all processes sleeping on the specified identifier runnable.
+ */
+void
+wakeup(ident)
+	register void *ident;
+{
+	register struct slpque *qp;
+	register struct proc *p, **q;
+	int s;
+
+	s = splhigh();
+	qp = &slpque[LOOKUP(ident)];
+restart:
+	for (q = &qp->sq_head; *q; ) {
+		p = *q;
+#ifdef DIAGNOSTIC
+		if (p->p_back || (p->p_stat != SSLEEP && p->p_stat != SSTOP))
+			panic("wakeup");
+#endif
+		if (p->p_wchan == ident) {
+			p->p_wchan = 0;
+			/* Remove curr entry */
+			*q = p->p_forw;
+			if (qp->sq_tailp == &p->p_forw)
+				qp->sq_tailp = q;
+			if (p->p_stat == SSLEEP) {
+				/* OPTIMIZED EXPANSION OF setrunnable(p); */
+				if (p->p_slptime > 1)
+					updatepri(p);
+				p->p_slptime = 0;
+				p->p_stat = SRUN;
+				if (p->p_flag & P_INMEM)
+					setrunqueue(p);
+				/*
+				 * Since curpriority is a user priority,
+				 * p->p_priority is always better than
+				 * curpriority.
+				 */
+				if ((p->p_flag & P_INMEM) == 0)
+					wakeup((caddr_t)&proc0);
+				else
+					need_resched();
+				/* END INLINE EXPANSION */
+				/*
+				 * We can jump here because we already
+				 * incremented q above.
+				 */
+				goto restart;
+			}
+		} else
+			q = &p->p_forw;
+	}
+	splx(s);
+}
+
+/*
+ * setrunqueue(p)
+ *
+ * Call should be made at spl6(), and p->p_stat should be SRUN
+ */
+ENTRY(setrunqueue)
+	movl	4(%esp),%eax		/* %eax = p */
+/*
+ * From genassym.c:
+ *  printf("#define\tP_BACK %p\n", &p->p_back)
+ *
+ * p->p_back is a ptr on the run/sleep queues
+ */
+	cmpl	$0,P_BACK(%eax)		/* should not be on q already */
+	je	set1					/* jmp if not on run que */
+	pushl	$set2
+	call	_panic				/* panic("setrunqueue") */
+set1:
+	cmpw	$RTP_PRIO_NORMAL,P_RTPRIO_TYPE(%eax) /* normal priority process? */
+	je	set_nort				/* jmp if normal proc */
+
+	movzwl	P_RTPRIO_PRIO(%eax),%edx
+
+	cmpw	$RTP_PRIO_REALTIME,P_RTPRIO_TYPE(%eax) /* realtime priority? */
+	jne	set_id				/* must be idle priority */
+	
+set_rt:
+	btsl	%edx,_whichrtqs			/* set q full bit */
+	shll	$3,%edx
+	addl	$_rtqs,%edx			/* locate q hdr */
+	movl	%edx,P_FORW(%eax)		/* link process on tail of q */
+	movl	P_BACK(%edx),%ecx
+	movl	%ecx,P_BACK(%eax)
+	movl	%eax,P_BACK(%edx)
+	movl	%eax,P_FORW(%ecx)
+	ret
+
+set_id:	
+	btsl	%edx,_whichidqs			/* set q full bit */
+	shll	$3,%edx
+	addl	$_idqs,%edx			/* locate q hdr */
+	movl	%edx,P_FORW(%eax)		/* link process on tail of q */
+	movl	P_BACK(%edx),%ecx
+	movl	%ecx,P_BACK(%eax)
+	movl	%eax,P_BACK(%edx)
+	movl	%eax,P_FORW(%ecx)
+	ret
+
+/* _whichqs: .long 0  /* which run queues have data */
+set_nort:                    	/*  Normal (RTOFF) code */
+	movzbl	P_PRI(%eax),%edx	/* %edx = p->priority */
+/*
+ * Process priorities range from 0 - 127 and freeBSD uses 32
+ * run queues. Hence, in order to identify the proc's runque
+ * we simply divide by 4 via shrl.
+ */
+	shrl	$2,%edx				/* divide prio by 4 for runque nb*/
+	btsl	%edx,_whichqs		/* set q full bit */
+	shll	$3,%edx				/* mult runque by 8 for offset */
+	addl	$_qs,%edx			/* locate q hdr */
+	movl	%edx,P_FORW(%eax)	/* link process on tail of q */
+								/* p->forw = q */
+	movl	P_BACK(%edx),%ecx	/* %ecx = q->p_back */
+	movl	%ecx,P_BACK(%eax)	/* p->p_back = q->p_back */
+	movl	%eax,P_BACK(%edx)	/* q->p_back = p */
+	movl	%eax,P_FORW(%ecx)	/* q->p_back->p_forw = p */
+	ret
 ```

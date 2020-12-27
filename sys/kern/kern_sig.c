@@ -686,7 +686,13 @@ psignal(p, signum)
 	if ((u_int)signum >= NSIG || signum == 0)
 		panic("psignal signal number");
 
-	/* sigmask(m) (1 << ((m)-1)) */
+	/*
+	 * #define sigmask(m) (1 << ((m)-1))
+	 *
+	 * Example: SIGKILL, the 9th signal.
+	 *
+	 *   mask = sigmask(9) = (1 << 8) = 256 
+	 */
 	mask = sigmask(signum);
 	prop = sigprop[signum];
 	/*
