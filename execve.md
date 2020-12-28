@@ -119,7 +119,6 @@ struct exec {
 #define EX_PIC		0x10	/* contains position independant code */
 #define EX_DYNAMIC	0x20	/* contains run-time link-edit info */
 #define EX_DPMASK	0x30	/* mask for the above */
-
 ```
 
 ## Code Walkthrough

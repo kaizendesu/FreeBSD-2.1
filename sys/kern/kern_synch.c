@@ -570,18 +570,27 @@ mi_switch()
 	 * process was running, and add that to its total so far.
 	 */
 	microtime(&tv);
+
+	/*
+	 * Assuming that runtime represents time in kernel:
+	 *   u = updated microseconds
+	 *   s = updated seconds
+	 */
 	u = p->p_rtime.tv_usec + (tv.tv_usec - runtime.tv_usec);
 	s = p->p_rtime.tv_sec + (tv.tv_sec - runtime.tv_sec);
+	
+	/* Overflow */
 	if (u < 0) {
 		u += 1000000;
 		s--;
-	} else if (u >= 1000000) {
+	} /* Second has elapsed */
+	  else if (u >= 1000000) {
 		u -= 1000000;
 		s++;
 	}
+	/* Update proc time vals */
 	p->p_rtime.tv_usec = u;
 	p->p_rtime.tv_sec = s;
-
 	/*
 	 * Check if the process exceeds its cpu resource allocation.
 	 * If over max, kill it.  In any case, if it has run for more
@@ -598,12 +607,12 @@ mi_switch()
 					rlim->rlim_cur += 5;
 			}
 		}
+		/* Increase nice value for proc running > 10 mins */
 		if (s > 10 * 60 && p->p_ucred->cr_uid && p->p_nice == NZERO) {
 			p->p_nice = NZERO + 4;
 			resetpriority(p);
 		}
 	}
-
 	/*
 	 * Pick a new current process and record its start time.
 	 */

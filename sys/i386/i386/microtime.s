@@ -48,18 +48,20 @@ ENTRY(microtime)
 	testl	%ecx, %ecx
 	jne	pentium_microtime
 #else
-	xorl	%ecx, %ecx	# clear ecx
+	xorl %ecx, %ecx	# clear ecx
 #endif
+	movb $TIMER_SEL0|TIMER_LATCH, %al	# prepare to latch
+										# %al = 0
 
-	movb	$TIMER_SEL0|TIMER_LATCH, %al	# prepare to latch
+	cli						# disable interrupts
 
-	cli			# disable interrupts
-
-	outb	%al, $TIMER_MODE	# latch timer 0's counter
+	outb %al, $TIMER_MODE	# latch timer 0's counter
+							# outb $0,0x043
 	inb	$TIMER_CNTR0, %al	# read counter value, LSB first
-	movb	%al, %cl
-	inb	$TIMER_CNTR0, %al
-	movb	%al, %ch
+							# inb 0x040,%al
+	movb %al, %cl
+	inb	$TIMER_CNTR0, %al	# inb 0x040,%al
+	movb %al, %ch			# cx = counter value
 
 	# Now check for counter overflow.  This is tricky because the
 	# timer chip doesn't let us atomically read the current counter
@@ -102,27 +104,29 @@ ENTRY(microtime)
 	# for ipending.  However, we don't need another heuristic, since
 	# the "cli" suffices to lock ipending.
 
-	movl	_timer0_max_count, %edx	# prepare for 2 uses
+	movl _timer0_max_count, %edx	# prepare for 2 uses
 
-	testb	$IRQ0, _ipending	# is a soft timer interrupt pending?
-	jne	overflow
+	# IRQ0 := 0x0001
+	testb $IRQ0, _ipending			# is a soft timer interrupt pending?
+	jne overflow					# jmp if _ipending == 0
 
 	# Do we have a possible overflow condition?
-	cmpl	_timer0_overflow_threshold, %ecx
-	jbe	1f
+	cmpl _timer0_overflow_threshold, %ecx
+	jbe	1f				# jmp if counter <= threshold
 
-	inb	$IO_ICU1, %al	# read IRR in ICU
-	testb	$IRQ0, %al	# is a hard timer interrupt pending?
-	je	1f
+	inb $IO_ICU1, %al	# read IRR in ICU
+						# inb 0x020, %al
+	testb $IRQ0, %al	# is a hard timer interrupt pending?
+	je 1f				# jmp if %al = 0
 overflow:
-	subl	%edx, %ecx	# some intr pending, count timer down through 0
+	subl %edx, %ecx	# some intr pending, count timer down through 0
+					# %ecx = counter - _timer0_max_count
 1:
-
 	# Subtract counter value from max count since it is a count-down value.
-	subl	%ecx, %edx
+	subl %ecx, %edx	# %edx = _timer0_max_count - counter
 
 	# Adjust for partial ticks.
-	addl	_timer0_prescaler_count, %edx
+	addl _timer0_prescaler_count, %edx	# %edx += partial ticks
 
 	# To divide by 1.193200, we multiply by 27465 and shift right by 15.
 	#
@@ -145,32 +149,37 @@ overflow:
 	# all i in the range.
 
 #if 0
-	imul	$27645, %edx				# 25 cycles on a 486
+	imul $27645, %edx				# 25 cycles on a 486
 #else
-	leal	(%edx,%edx,2), %eax	# a = 3		2 cycles on a 486
-	leal	(%edx,%eax,4), %eax	# a = 13	2
-	movl	%eax, %ecx		# c = 13	1
-	shl	$5, %eax		# a = 416	2
-	addl	%ecx, %eax		# a = 429	1
-	leal	(%edx,%eax,8), %eax	# a = 3433	2
-	leal	(%edx,%eax,8), %eax	# a = 27465	2 (total 12 cycles)
+	# Multiply by 27465
+	leal (%edx,%edx,2), %eax	# a = 3		2 cycles on a 486
+	leal (%edx,%eax,4), %eax	# a = 13	2
+	movl %eax, %ecx				# c = 13	1
+	shl $5, %eax				# a = 416	2
+	addl %ecx, %eax				# a = 429	1
+	leal (%edx,%eax,8), %eax	# a = 3433	2
+	leal (%edx,%eax,8), %eax	# a = 27465	2 (total 12 cycles)
 #endif /* 0 */
+	# Divide by 32768
 	shr	$15, %eax
 
 common_microtime:
-	addl	_time+4, %eax	# usec += time.tv_sec
-	movl	_time, %edx	# sec = time.tv_sec
+	# _time is a timeval struct
+	addl _time+4, %eax	# %eax = usec += time.tv_sec
+	movl _time, %edx	# %edx = sec = time.tv_sec
 
-	sti			# enable interrupts
+	sti					# enable interrupts
 
-	cmpl	$1000000, %eax	# usec valid?
-	jb	1f
-	subl	$1000000, %eax	# adjust usec
-	incl	%edx		# bump sec
+	cmpl $1000000, %eax	# usec valid?
+	jb 1f				# jmp if %eax < 1,000,000
+	subl $1000000, %eax	# adjust usec
+						# %eax -= 1,000,000
+	incl %edx			# bump sec
+						# %edx += 1
 1:
-	movl	4(%esp), %ecx	# load timeval pointer arg
-	movl	%edx, (%ecx)	# tvp->tv_sec = sec
-	movl	%eax, 4(%ecx)	# tvp->tv_usec = usec
+	movl 4(%esp), %ecx	# load timeval pointer arg
+	movl %edx, (%ecx)	# tvp->tv_sec = sec
+	movl %eax, 4(%ecx)	# tvp->tv_usec = usec
 
 	ret
 

@@ -202,7 +202,7 @@ struct	pgrp {
 };
 ```
 
-### *user* and *pcb* Structures
+### *pcb* and *user* Structures
 
 ```c
 /* From /sys/i386/include/pcb.h */

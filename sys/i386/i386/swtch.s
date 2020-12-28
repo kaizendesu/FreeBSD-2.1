@@ -291,16 +291,16 @@ badsw:
  */
 ENTRY(cpu_switch)
 	/* switch to new process. first, save context as needed */
-	movl	_curproc,%ecx
+	movl	_curproc,%ecx		/* %ecx = curproc */
 
 	/* if no process to save, don't bother */
 	testl	%ecx,%ecx
-	je	sw1
+	je	sw1						/* jmp if curproc == 0 */
 
-	movl	P_ADDR(%ecx),%ecx
+	movl	P_ADDR(%ecx),%ecx	/* %ecx = kva of u_area */
 
 	movl	(%esp),%eax			/* Hardware registers */
-	movl	%eax,PCB_EIP(%ecx)
+	movl	%eax,PCB_EIP(%ecx)	/* set EIP to return addr */
 	movl	%ebx,PCB_EBX(%ecx)
 	movl	%esp,PCB_ESP(%ecx)
 	movl	%ebp,PCB_EBP(%ecx)
@@ -308,37 +308,38 @@ ENTRY(cpu_switch)
 	movl	%edi,PCB_EDI(%ecx)
 
 	movb	_intr_nesting_level,%al
-	movb	%al,PCB_INL(%ecx)
+	movb	%al,PCB_INL(%ecx)	/* set interrupt lvl */
 
 #if NNPX > 0
 	/* have we used fp, and need a save? */
 	mov	_curproc,%eax
 	cmp	%eax,_npxproc
 	jne	1f
-	addl	$PCB_SAVEFPU,%ecx		/* h/w bugs make saving complicated */
+	addl	$PCB_SAVEFPU,%ecx	/* h/w bugs make saving complicated */
 	pushl	%ecx
 	call	_npxsave			/* do it in a big C function */
 	popl	%eax
 1:
 #endif	/* NNPX > 0 */
 
-	movb	$1,_intr_nesting_level		/* charge Intr, not Sys/Idle */
+	movb	$1,_intr_nesting_level	/* charge Intr, not Sys/Idle */
 
-	movl	$0,_curproc			/* out of process */
+	movl	$0,_curproc				/* out of process */
 
 	/* save is done, now choose a new process or idle */
 sw1:
 	cli
 sw1a:
-	movl    _whichrtqs,%edi			/* pick next p. from rtqs */
+/* Check rt procs first */
+	movl    _whichrtqs,%edi	/* pick next p. from rtqs */
 	testl	%edi,%edi
 	jz	nortqr				/* no realtime procs */
 
-	/* XXX - bsf is sloow */
+/* XXX - bsf is sloow */
 	bsfl	%edi,%ebx			/* find a full q */
 	jz	nortqr				/* no proc on rt q - try normal ... */
 
-	/* XX update whichqs? */
+/* XX update whichqs? */
 	btrl	%ebx,%edi			/* clear q full status */
 	leal	_rtqs(,%ebx,8),%eax		/* select q */
 	movl	%eax,%esi
@@ -366,31 +367,35 @@ rt3:
 nortqr:
 	movl	_whichqs,%edi
 2:
-	/* XXX - bsf is sloow */
-	bsfl	%edi,%ebx			/* find a full q */
+/* XXX - bsf is sloow */
+/* bsf = bit scan forward */
+	bsfl	%edi,%ebx		/* find a full q */
 	jz	idqr				/* if none, idle */
 
-	/* XX update whichqs? */
+/* XX update whichqs? */
+/* btr = bit test reset */
 	btrl	%ebx,%edi			/* clear q full status */
-	leal	_qs(,%ebx,8),%eax		/* select q */
-	movl	%eax,%esi
-
+	leal	_qs(,%ebx,8),%eax	/* select q */
+								/* %eax = _qs + (%ebx*8) 
+								       = q hdr          */
+	movl	%eax,%esi			/* %esi = q */
 #ifdef	DIAGNOSTIC
-	cmpl	P_FORW(%eax),%eax 		/* linked to self? (e.g. not on list) */
-	je	badsw				/* not possible */
+	cmpl	P_FORW(%eax),%eax 	/* linked to self? (e.g. not on list) */
+	je	badsw					/* not possible */
 #endif
+	movl	P_FORW(%eax),%ecx	/* unlink from front of process q */
+								/* %ecx = q->p_forw  (old 1st proc) */
+	movl	P_FORW(%ecx),%edx	/* %edx = q->p_forw->p_forw (2nd proc) */
+	movl	%edx,P_FORW(%eax)	/* q->p_forw = 2nd proc */
+	movl	P_BACK(%ecx),%eax	/* q = (old 1st proc)->p_back */
+	movl	%eax,P_BACK(%edx)	/* (2nd proc)->p_back = q */
 
-	movl	P_FORW(%eax),%ecx		/* unlink from front of process q */
-	movl	P_FORW(%ecx),%edx
-	movl	%edx,P_FORW(%eax)
-	movl	P_BACK(%ecx),%eax
-	movl	%eax,P_BACK(%edx)
-
-	cmpl	P_FORW(%ecx),%esi		/* q empty */
-	je	3f
+	cmpl	P_FORW(%ecx),%esi	/* q empty */
+								/* (old 1st proc)->p_forw == q ? */
+	je	3f						/* jmp if que is empty */
 	btsl	%ebx,%edi			/* nope, set to indicate not empty */
 3:
-	movl	%edi,_whichqs			/* update q status */
+	movl	%edi,_whichqs		/* update q status */
 	jmp	swtch_com
 
 idqr: /* was sw1a */
@@ -423,22 +428,21 @@ id3:
 	movl	%edi,_whichidqs			/* update q status */
 
 swtch_com:
-	movl	$0,%eax
-	movl	%eax,_want_resched
-
+	movl	$0,%eax					/* %eax = 0 */
+	movl	%eax,_want_resched		/* _want_resched = 0 */
 #ifdef	DIAGNOSTIC
 	cmpl	%eax,P_WCHAN(%ecx)
 	jne	badsw
 	cmpb	$SRUN,P_STAT(%ecx)
 	jne	badsw
 #endif
-
 	movl	%eax,P_BACK(%ecx) 		/* isolate process to run */
-	movl	P_ADDR(%ecx),%edx
-	movl	PCB_CR3(%edx),%ebx
+									/* (old 1st proc)->p_back = NULL */
+	movl	P_ADDR(%ecx),%edx		/* %edx = new running proc's u_area */
+	movl	PCB_CR3(%edx),%ebx		/* %ebx = new running proc's cr3 */
 
 	/* switch address space */
-	movl	%ebx,%cr3
+	movl	%ebx,%cr3				/* Update cr3 reg */
 
 	/* restore context */
 	movl	PCB_EBX(%edx),%ebx
@@ -446,15 +450,14 @@ swtch_com:
 	movl	PCB_EBP(%edx),%ebp
 	movl	PCB_ESI(%edx),%esi
 	movl	PCB_EDI(%edx),%edi
-	movl	PCB_EIP(%edx),%eax
-	movl	%eax,(%esp)
+	movl	PCB_EIP(%edx),%eax		/* %eax = saved eip */
+	movl	%eax,(%esp)				/* set return addr */
 
 	movl	%edx,_curpcb
 	movl	%ecx,_curproc			/* into next process */
 
-	movb	PCB_INL(%edx),%al
-	movb	%al,_intr_nesting_level
-
+	movb	PCB_INL(%edx),%al		/* saved int nesting lvl */
+	movb	%al,_intr_nesting_level	/* update */
 #ifdef	USER_LDT
 	cmpl	$0, PCB_USERLDT(%edx)
 	jnz	1f
@@ -469,7 +472,6 @@ swtch_com:
 	popl	%edx
 2:
 #endif
-
 	sti
 	ret
 
