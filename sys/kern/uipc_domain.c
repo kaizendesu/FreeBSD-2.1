@@ -125,6 +125,8 @@ pffindproto(family, protocol, type)
 
 	if (family == 0)
 		return (0);
+
+	/* domains is a global ptr to a linker set of domains */
 	for (dp = domains; dp; dp = dp->dom_next)
 		if (dp->dom_family == family)
 			goto found;

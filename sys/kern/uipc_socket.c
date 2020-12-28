@@ -73,6 +73,7 @@ socreate(dom, aso, type, proto)
 	register struct socket *so;
 	register int error;
 
+	/* Determine the protocol */
 	if (proto)
 		prp = pffindproto(dom, proto, type);
 	else
@@ -81,16 +82,22 @@ socreate(dom, aso, type, proto)
 		return (EPROTONOSUPPORT);
 	if (prp->pr_type != type)
 		return (EPROTOTYPE);
+
 	MALLOC(so, struct socket *, sizeof(*so), M_SOCKET, M_WAIT);
 	bzero((caddr_t)so, sizeof(*so));
 	so->so_type = type;
+
+	/* Set priv for broadcast, raw, etc. for su */
 	if (p->p_ucred->cr_uid == 0)
 		so->so_state = SS_PRIV;
 	so->so_proto = prp;
+
+	/* Attach the protocol to socket so via userreq */
 	error =
 	    (*prp->pr_usrreq)(so, PRU_ATTACH,
 		(struct mbuf *)0, (struct mbuf *)proto, (struct mbuf *)0);
 	if (error) {
+		/* SS_NOFDREF := no file tbl ref */
 		so->so_state |= SS_NOFDREF;
 		sofree(so);
 		return (error);
