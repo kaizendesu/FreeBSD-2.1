@@ -67,7 +67,6 @@ void
 roundrobin(arg)
 	void *arg;
 {
-
 	need_resched();
 	timeout(roundrobin, NULL, hz / 10);
 }
