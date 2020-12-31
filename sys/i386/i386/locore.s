@@ -161,13 +161,13 @@ NON_GPROF_ENTRY(btext)
 	movl	%esp, %ebp
 
 	/* Don't trust what the BIOS gives for eflags. */
-	pushl	$PSL_KERNEL
+	pushl	$PSL_KERNEL		/* PSL_KERNEL = 0x00000002 */
 	popfl
 
 	/* Don't trust what the BIOS gives for %fs and %gs. */
 	mov	%ds, %ax
 	mov	%ax, %fs
-	mov	%ax, %gs
+	mov	%ax, %gs			/* Set %gs/%fs to %ds */
 
 	/*
 	 * This code is called in different ways depending on what loaded
@@ -229,9 +229,9 @@ NON_GPROF_ENTRY(btext)
 1:	/* newboot: */
 	movl	28(%ebp),%ebx		/* &bootinfo.version */
 	movl	BI_VERSION(%ebx),%eax
-	cmpl	$1,%eax			/* We only understand version 1 */
+	cmpl	$1,%eax				/* We only understand version 1 */
 	je	1f
-	movl	$1,%eax			/* Return status */
+	movl	$1,%eax				/* Return status */
 	leave
 	ret
 
@@ -241,10 +241,10 @@ NON_GPROF_ENTRY(btext)
 	 */
 	movl	BI_KERNELNAME(%ebx),%esi
 	cmpl	$0,%esi
-	je	2f			/* No kernelname */
-	movl	$MAXPATHLEN,%ecx	/* Brute force!!! */
-	lea	_kernelname-KERNBASE,%edi
-	cmpb	$'/',(%esi)		/* Make sure it starts with a slash */
+	je	2f							/* No kernelname */
+	movl	$MAXPATHLEN,%ecx		/* Brute force!!! */
+	lea	_kernelname-KERNBASE,%edi	/* %edi = pa of _kernelname */
+	cmpb	$'/',(%esi)				/* Make sure it starts with a slash */
 	je	1f
 	movb	$'/',(%edi)
 	incl	%edi
@@ -261,24 +261,24 @@ NON_GPROF_ENTRY(btext)
 	 * of the struct don't contain a size field and there are 2 old
 	 * versions with the same version number.
 	 */
-	movl	$BI_ENDCOMMON,%ecx	/* prepare for sizeless version */
+	movl	$BI_ENDCOMMON,%ecx		/* prepare for sizeless version */
 	testl	$RB_BOOTINFO,8(%ebp)	/* bi_size (and bootinfo) valid? */
-	je	got_bi_size		/* no, sizeless version */
+	je	got_bi_size					/* no, sizeless version */
 	movl	BI_SIZE(%ebx),%ecx
 got_bi_size:
 
 	/* 
 	 * Copy the common part of the bootinfo struct
 	 */
-	movl	%ebx,%esi
-	movl	$_bootinfo-KERNBASE,%edi
-	cmpl	$BOOTINFO_SIZE,%ecx
+	movl	%ebx,%esi					/* %esi = &bootinfo */
+	movl	$_bootinfo-KERNBASE,%edi	/* %edi = pa of _bootinfo */
+	cmpl	$BOOTINFO_SIZE,%ecx			/* %ecx = sz of bootinfo */
 	jbe	got_common_bi_size
 	movl	$BOOTINFO_SIZE,%ecx
 got_common_bi_size:
 	cld
 	rep
-	movsb
+	movsb								/* Copy bootinfo struct */
 
 #ifdef NFS
 	/*
@@ -303,9 +303,9 @@ got_common_bi_size:
 	 * up howto and bootdev, cyloffset and esym are no longer used
 	 */
 2:	/* olddiskboot: */
-	movl	8(%ebp),%eax
+	movl	8(%ebp),%eax		/* %eax = RB_BOOTINFO|(opts & RBX_MASK) */
 	movl	%eax,_boothowto-KERNBASE
-	movl	12(%ebp),%eax
+	movl	12(%ebp),%eax		/* %eax = MAKEBOOTDEV */
 	movl	%eax,_bootdev-KERNBASE
 #if defined(USERCONFIG_BOOT) && defined(USERCONFIG)
 	movl	$0x10200, %esi
@@ -463,7 +463,6 @@ got_common_bi_size:
 
 1:	movl	$CPU_586,_cpu-KERNBASE
 2:
-
 	/*
 	 * Finished with old stack; load new %esp now instead of later so
 	 * we can trace this code without having to worry about the trace
@@ -484,36 +483,36 @@ got_common_bi_size:
  * Virtual address space of kernel:
  *
  *	text | data | bss | [syms] | page dir | proc0 kernel stack | usr stk map | Sysmap
- *      pages:                          1         UPAGES (2)             1         NKPT (7)
+ *      pages:                       1         UPAGES (2)             1        NKPT (7)
  */
 
 /* find end of kernel image */
-	movl	$_end-KERNBASE,%ecx
+	movl	$_end-KERNBASE,%ecx		/* %ecx = pa of _end */
 	addl	$NBPG-1,%ecx			/* page align up */
 	andl	$~(NBPG-1),%ecx
-	movl	%ecx,%esi			/* esi = start of free memory */
-	movl	%ecx,_KERNend-KERNBASE		/* save end of kernel */
+	movl	%ecx,%esi				/* esi = start of free memory (phys addr) */
+	movl	%ecx,_KERNend-KERNBASE	/* save end of kernel */
 
 /* clear bss */
-	movl	$_edata-KERNBASE,%edi
-	subl	%edi,%ecx			/* get amount to clear */
-	xorl	%eax,%eax			/* specify zero fill */
+	movl	$_edata-KERNBASE,%edi	/* %edi = pa of bss */
+	subl	%edi,%ecx				/* get amount to clear */
+	xorl	%eax,%eax				/* specify zero fill */
 	cld
 	rep
 	stosb
 
 #ifdef DDB
 /* include symbols in "kernel image" if they are loaded */
-	movl	_bootinfo+BI_ESYMTAB-KERNBASE,%edi
+	movl	_bootinfo+BI_ESYMTAB-KERNBASE,%edi	/* %edi = pa of the end of symtab */
 	testl	%edi,%edi
-	je	over_symalloc
+	je	over_symalloc							/* jmp if addr is NULL */
 	addl	$NBPG-1,%edi
-	andl	$~(NBPG-1),%edi
-	movl	%edi,%esi
-	movl	%esi,_KERNend-KERNBASE
+	andl	$~(NBPG-1),%edi						/* Round up to nearest pg */
+	movl	%edi,%esi							/* %esi = rounded pa of esymtab */
+	movl	%esi,_KERNend-KERNBASE				/* Incr _KERNend with symtab's len */
 	movl	$KERNBASE,%edi
-	addl	%edi,_bootinfo+BI_SYMTAB-KERNBASE
-	addl	%edi,_bootinfo+BI_ESYMTAB-KERNBASE
+	addl	%edi,_bootinfo+BI_SYMTAB-KERNBASE	/* Virtualize symtab addr */
+	addl	%edi,_bootinfo+BI_ESYMTAB-KERNBASE	/* Virtualize esymtab addr */
 over_symalloc:
 #endif
 
