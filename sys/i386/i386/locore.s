@@ -634,10 +634,11 @@ over_symalloc:
  * 
  * 1111000111 0000001100 000000000000  end of KPT
  *
- * Now let's look at the code for initializing the pg dir:
+ * Now let's look at the code for mapping the pg dir and the
+ * pg tbls themselves:
  */
 
-/* We want to create 11 pdes with R/W permission. */
+/* We want to create 11 ptes with R/W permission. */
 	movl	$(1+UPAGES+1+NKPT),%ecx	/* %ecx = 11; number of PTEs */
 	movl	%esi,%eax				/* phys address of PTD */
 	andl	$PG_FRAME,%eax			/* convert to PFN, should be a NOP */
@@ -676,20 +677,23 @@ over_symalloc:
 
 	movl    _KPTphys-KERNBASE,%ebx		/* base of kernel page tables */
 	lea     (0xa0 * PTESIZE)(%ebx),%ebx	/* hardwire ISA hole at KERNBASE + 0xa0000 */
-	movl	$0x100-0xa0,%ecx		/* for this many pte s, */
+										/* PTESIZE = 4 bytes. Hence, 0xa0 * PTESIZE
+										   is equal to the 160th pte */
+	movl	$0x100-0xa0,%ecx			/* for this many pte s (96), */
 	movl	$(0xa0000|PG_V|PG_KW),%eax	/* valid, kernel read/write, non-cacheable */
 	movl	%ebx,_atdevphys-KERNBASE	/* save phys addr of ptes */
 	fillkpt
 
  /* map proc 0's kernel stack into user page table page */
 
-	movl	$UPAGES,%ecx			/* for this many pte s, */
-	lea	(1*NBPG)(%esi),%eax		/* physical address in proc 0 */
-	lea	(KERNBASE)(%eax),%edx		/* change into virtual addr */
+	movl	$UPAGES,%ecx				/* for this many pte s, */
+	lea	(1*NBPG)(%esi),%eax				/* physical address in proc 0 */
+	lea	(KERNBASE)(%eax),%edx			/* change into virtual addr */
 	movl	%edx,_proc0paddr-KERNBASE	/* save VA for proc 0 init */
-	orl	$PG_V|PG_KW,%eax		/* valid, kernel read/write */
+	orl	$PG_V|PG_KW,%eax				/* valid, kernel read/write */
 	lea	((1+UPAGES)*NBPG)(%esi),%ebx	/* addr of stack page table in proc 0 */
-	addl	$(KSTKPTEOFF * PTESIZE),%ebx	/* offset to kernel stack PTE */
+	addl	$(KSTKPTEOFF * PTESIZE),%ebx/* offset to kernel stack PTE */
+										/* KSTKPTEOFF = 1022 */
 	fillkpt
 
 /*
@@ -698,22 +702,27 @@ over_symalloc:
 	/* install a pde for temporary double map of bottom of VA */
 	movl	_KPTphys-KERNBASE,%eax
 	orl     $PG_V|PG_KW,%eax		/* valid, kernel read/write */
-	movl	%eax,(%esi)			/* which is where temp maps! */
-
+	movl	%eax,(%esi)				/* which is where temp maps! */
+									/* Remember that %esi is the base
+									   of the KPD, so moving %eax there
+									   is setting the first pde         */
 	/* initialize kernel pde's */
-	movl	$(NKPT),%ecx			/* for this many PDEs */
+	movl	$(NKPT),%ecx			/* for this many (7) PDEs */
 	lea	(KPTDI*PDESIZE)(%esi),%ebx	/* offset of pde for kernel */
+									/* KPTDI = 1023 - 63 = 960  */
 	fillkpt
 
 	/* install a pde recursively mapping page directory as a page table! */
 	movl	%esi,%eax			/* phys address of ptd in proc 0 */
 	orl	$PG_V|PG_KW,%eax		/* pde entry is valid */
 	movl	%eax,PTDPTDI*PDESIZE(%esi)	/* which is where PTmap maps! */
+										/* PTDPTDI = 959 */ 
 
 	/* install a pde to map kernel stack for proc 0 */
 	lea	((1+UPAGES)*NBPG)(%esi),%eax	/* physical address of pt in proc 0 */
 	orl	$PG_V|PG_KW,%eax		/* pde entry is valid */
 	movl	%eax,KSTKPTDI*PDESIZE(%esi)	/* which is where kernel stack maps! */
+										/* KSTKPTDI = 958 */
 
 #ifdef BDE_DEBUGGER
 	/* copy and convert stuff from old gdt and idt for debugger */
