@@ -290,5 +290,149 @@ over_symalloc:
  * the value first. esi should ALWAYS be page aligned!!
  */
 	movl	%esi,%ecx			/* Get current first availiable address */
+								/* %ecx = %esi; base of pg dir */
 
+/* clear pagetables, page directory, stack, etc... */
+	movl	%esi,%edi						/* base (page directory) */
+	movl	$((1+UPAGES+1+NKPT)*NBPG),%ecx	/* amount to clear */
+	xorl	%eax,%eax						/* specify zero fill */
+	cld
+	rep
+	stosb									/* Clear 11 pgs of mem */
+
+/* physical address of Idle proc/kernel page directory */
+	movl	%esi,_IdlePTD-KERNBASE
+
+/*
+ * fillkpt
+ *	eax = (page frame address | control | status) == pte
+ *	ebx = address of page table
+ *	ecx = how many pages to map
+ */
+#define	fillkpt		\
+1:	movl	%eax,(%ebx)	; \
+	addl	$NBPG,%eax	; /* increment physical address */ \
+	addl	$4,%ebx		; /* next pte */ \
+	loop	1b		;
+
+/*
+ * Map Kernel
+ *
+ * First step - build page tables
+ */
+#if defined (KGDB) || defined (BDE_DEBUGGER)
+	movl	_KERNend-KERNBASE,%ecx	/* this much memory, */
+	shrl	$PGSHIFT,%ecx			/* for this many PTEs */
+#ifdef BDE_DEBUGGER
+	cmpl	$0xa0,%ecx			/* XXX - cover debugger pages */
+	jae	1f
+	movl	$0xa0,%ecx
+1:
+#endif /* BDE_DEBUGGER */
+	movl	$PG_V|PG_KW,%eax			/* kernel R/W, valid, pg frame 0 */
+	lea	((1+UPAGES+1)*NBPG)(%esi),%ebx	/* phys addr of kernel PT base */
+	movl	%ebx,_KPTphys-KERNBASE		/* save pa in global */
+	fillkpt
+
+#else /* !KGDB && !BDE_DEBUGGER */
+	/* write protect kernel text (doesn't do a thing for 386's - only 486's) */
+	movl	$_etext-KERNBASE,%ecx	/* get size of text */
+	addl	$NBPG-1,%ecx			/* round up to page */
+	shrl	$PGSHIFT,%ecx			/* for this many PTEs */
+	movl	$PG_V|PG_KR,%eax		/* specify read only */
+#if 0
+/*	movl	$_etext,%ecx			// get size of text
+	subl	$_btext,%ecx
+	addl	$NBPG-1,%ecx			// round up to page
+	shrl	$PGSHIFT,%ecx			// for this many PTEs
+	movl	$_btext-KERNBASE,%eax	// get offset to physical memory
+	orl	$PG_V|PG_KR,%eax			// specify read only
+*/
+#endif
+	lea	((1+UPAGES+1)*NBPG)(%esi),%ebx	/* phys addr of kernel PT base */
+	movl	%ebx,_KPTphys-KERNBASE		/* save pa in global */
+	fillkpt
+
+	/* data and bss are r/w */
+	andl	$PG_FRAME,%eax			/* strip to just addr of bss */
+									/* should be addr of data, not bss */
+	movl	_KERNend-KERNBASE,%ecx	/* calculate size... */
+	subl	%eax,%ecx				/* ... of data segments */
+	shrl	$PGSHIFT,%ecx
+	orl	$PG_V|PG_KW,%eax		/* valid, kernel read/write */
+	fillkpt
+#endif /* KGDB || BDE_DEBUGGER */
+
+/* now initialize the page dir, upages, p0stack PT, and page tables */
+
+/*
+ * 11110000 00000000 00000000 00000000	KERNBASE
+ *
+ * The kernel has 7 page table pages, which means it is 28MiB in size.
+ * Hence, we need to add 28 MiB to KERNBASE to determine the va of
+ * KERNEND.
+ *
+ * 11110000 00000000 00000000 00000000
+ * 00000001 11000000 00000000 00000000 +
+ * ------------------------------------
+ * 11110001 11000000 00000000 00000000  KERNEND
+ *
+ * The end of the kernel marks the base of the PTD. Hence,
+ * KERNEND = PTD.
+ *
+ * The KPTs are four pages above PTD. Hence,
+ *
+ * 11110001 11000000 01010000 00000000  KPT
+ *
+ * There are 7 KPTs, so the end of KPT is given by,
+ *
+ * 11110001 11000000 11000000 00000000  end of KPT
+ *
+ * Now that all the addresses have been established, let us visualize
+ * them in x386's page format.
+ *
+ *  pg dir     pg tbl     pg offset
+ * 1111000111 0000000000 000000000000  KERNEND
+ *
+ * 1111000111 0000000101 000000000000  KPT
+ * 
+ * 1111000111 0000001100 000000000000  end of KPT
+ *
+ * Now let's look at the code for initializing the pg dir:
+ */
+
+/* We want to create 11 pdes with R/W permission. */
+	movl	$(1+UPAGES+1+NKPT),%ecx	/* %ecx = 11; number of PTEs */
+	movl	%esi,%eax				/* phys address of PTD */
+	andl	$PG_FRAME,%eax			/* convert to PFN, should be a NOP */
+	orl	$PG_V|PG_KW,%eax			/* valid, kernel read/write */
+/*
+ * We need to connect the KPTs with the PTD so that the mappings work
+ * later on.
+ */
+	movl	%esi,%ebx	/* calculate pte offset to ptd */
+
+/* 0000000111 0000000000 000000000000  %ebx (KERNEND - KERNBASE) */
+
+	shrl	$PGSHIFT-2,%ebx
+
+/* 0000000000 0000000111 000000000000  %ebx */
+
+	addl	%esi,%ebx	/* address of page directory */
+
+/* 0000000111 0000000111 000000000000  %ebx */
+
+	addl	$((1+UPAGES+1)*NBPG),%ebx	/* offset to kernel page tables */
+/*
+ * 0000000111 0000000111 000000000000
+ *                   100 000000000000 +
+ * ------------------------------------
+ * 0000000111 0000001011 000000000000  Address of KPT mapping PTD
+ *
+ * Note: It is helpful to remember that the ONLY difference btw virt and
+ * phys addrs in this example is the top four bits are set for vaddrs.
+ * Hence, the logic for connecting the KPTs and KPD is clear once you
+ * imagine this va passing through the hw addr translation algo.
+ */
+	fillkpt
 ```
