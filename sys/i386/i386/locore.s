@@ -604,35 +604,37 @@ over_symalloc:
 /*
  * 11110000 00000000 00000000 00000000	KERNBASE
  *
- * The kernel has 7 page table pages, which means it is 28MiB in size.
- * Hence, we need to add 28 MiB to KERNBASE to determine the va of
- * KERNEND.
+ * Let's assume that the freeBSD kernel is 16MiB in size,
+ * which means that 4 KPTs will be dedicated to mapping
+ * the kernel image and the remaining 3 will be used for
+ * other mappings. Thus, to caluclate KERNEND, we simply
+ * need to add 16MiB to KERNBASE.
  *
  * 11110000 00000000 00000000 00000000
- * 00000001 11000000 00000000 00000000 +
+ * 00000001 00000000 00000000 00000000 +
  * ------------------------------------
- * 11110001 11000000 00000000 00000000  KERNEND
+ * 11110001 00000000 00000000 00000000  KERNEND
  *
  * The end of the kernel marks the base of the PTD. Hence,
  * KERNEND = PTD.
  *
  * The KPTs are four pages above PTD. Hence,
  *
- * 11110001 11000000 01010000 00000000  KPT
+ * 11110001 00000000 01010000 00000000  KPT
  *
  * There are 7 KPTs, so the end of KPT is given by,
  *
- * 11110001 11000000 11000000 00000000  end of KPT
+ * 11110001 00000000 11000000 00000000  end of KPT
  *
  * Now that all the addresses have been established, let us visualize
  * them in x386's page format.
  *
  *  pg dir     pg tbl     pg offset
- * 1111000111 0000000000 000000000000  KERNEND
+ * 1111000100 0000000000 000000000000  KERNEND
  *
- * 1111000111 0000000101 000000000000  KPT
+ * 1111000100 0000000101 000000000000  KPT
  * 
- * 1111000111 0000001100 000000000000  end of KPT
+ * 1111000100 0000001100 000000000000  end of KPT
  *
  * Now let's look at the code for mapping the pg dir and the
  * pg tbls themselves:
@@ -649,22 +651,22 @@ over_symalloc:
  */
 	movl	%esi,%ebx	/* calculate pte offset to ptd */
 
-/* 0000000111 0000000000 000000000000  %ebx (KERNEND - KERNBASE) */
+/* 0000000100 0000000000 000000000000  %ebx (KERNEND - KERNBASE) */
 
 	shrl	$PGSHIFT-2,%ebx
 
-/* 0000000000 0000000111 000000000000  %ebx */
+/* 0000000000 0000000100 000000000000  %ebx */
 
 	addl	%esi,%ebx	/* address of page directory */
 
-/* 0000000111 0000000111 000000000000  %ebx */
+/* 0000000100 0000000100 000000000000  %ebx */
 
 	addl	$((1+UPAGES+1)*NBPG),%ebx	/* offset to kernel page tables */
 /*
- * 0000000111 0000000111 000000000000
+ * 0000000100 0000000100 000000000000
  *                   100 000000000000 +
  * ------------------------------------
- * 0000000111 0000001011 000000000000  Address of KPT mapping PTD
+ * 0000000111 0000001000 000000000000  Address of KPT mapping PTD
  *
  * Note: It is helpful to remember that the ONLY difference btw virt and
  * phys addrs in this example is the top four bits are set for vaddrs.

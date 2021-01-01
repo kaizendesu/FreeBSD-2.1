@@ -57,6 +57,11 @@ struct bootinfo {
 };
 ```
 
+### Kernel Page Directory and Page Tables
+
+```txt
+```
+
 ## Code Walkthrough
 
 ```c
@@ -368,40 +373,57 @@ over_symalloc:
 /*
  * 11110000 00000000 00000000 00000000	KERNBASE
  *
- * The kernel has 7 page table pages, which means it is 28MiB in size.
- * Hence, we need to add 28 MiB to KERNBASE to determine the va of
- * KERNEND.
+ * Let's assume that the freeBSD kernel is 16MiB in size,
+ * which means that 4 KPTs will be dedicated to mapping
+ * the kernel image and the remaining 3 will be used for
+ * other mappings. Thus, to calculate KERNEND, we simply
+ * need to add 16MiB to KERNBASE.
  *
  * 11110000 00000000 00000000 00000000
- * 00000001 11000000 00000000 00000000 +
+ * 00000001 00000000 00000000 00000000 +
  * ------------------------------------
- * 11110001 11000000 00000000 00000000  KERNEND
+ * 11110001 00000000 00000000 00000000  KERNEND
  *
  * The end of the kernel marks the base of the PTD. Hence,
  * KERNEND = PTD.
  *
  * The KPTs are four pages above PTD. Hence,
  *
- * 11110001 11000000 01010000 00000000  KPT
+ * 11110001 00000000 01010000 00000000  KPT
  *
  * There are 7 KPTs, so the end of KPT is given by,
  *
- * 11110001 11000000 11000000 00000000  end of KPT
+ * 11110001 00000000 11000000 00000000  end of KPT
  *
  * Now that all the addresses have been established, let us visualize
  * them in x386's page format.
  *
  *  pg dir     pg tbl     pg offset
- * 1111000111 0000000000 000000000000  KERNEND
+ * 1111000100 0000000000 000000000000  KERNEND
  *
- * 1111000111 0000000101 000000000000  KPT
+ * 1111000100 0000000101 000000000000  KPT
  * 
- * 1111000111 0000001100 000000000000  end of KPT
+ * 1111000100 0000001100 000000000000  end of KPT
  *
  * Now let's look at the code for initializing the pg dir:
  */
 
-/* We want to create 11 pdes with R/W permission. */
+/*
+ * We want to create 11 ptes with R/W permission, where
+ * each pte corresponds to a particular kernel data struct:
+ *
+ *   1st pte  --> pg dir
+ *   2nd pte  --> UPAGE 1
+ *   3rd pte  --> UPAGE 2
+ *   4th pte  --> proc0 stack
+ *   5th pte  --> KPT 1
+ *   6th pte  --> KPT 2
+ *         ...
+ *   11th pte --> KPT 7 
+ *
+ * Hence, we map 11 ptes to map recursively map the 7 KPTs
+ * and to map the other 4 kernel data structures.
+ */
 	movl	$(1+UPAGES+1+NKPT),%ecx	/* %ecx = 11; number of PTEs */
 	movl	%esi,%eax				/* phys address of PTD */
 	andl	$PG_FRAME,%eax			/* convert to PFN, should be a NOP */
@@ -412,22 +434,22 @@ over_symalloc:
  */
 	movl	%esi,%ebx	/* calculate pte offset to ptd */
 
-/* 0000000111 0000000000 000000000000  %ebx (KERNEND - KERNBASE) */
+/* 0000000100 0000000000 000000000000  %ebx (KERNEND - KERNBASE) */
 
 	shrl	$PGSHIFT-2,%ebx
 
-/* 0000000000 0000000111 000000000000  %ebx */
+/* 0000000000 0000000100 000000000000  %ebx */
 
 	addl	%esi,%ebx	/* address of page directory */
 
-/* 0000000111 0000000111 000000000000  %ebx */
+/* 0000000100 0000000100 000000000000  %ebx */
 
 	addl	$((1+UPAGES+1)*NBPG),%ebx	/* offset to kernel page tables */
 /*
- * 0000000111 0000000111 000000000000
+ * 0000000100 0000000100 000000000000
  *                   100 000000000000 +
  * ------------------------------------
- * 0000000111 0000001011 000000000000  Address of KPT mapping PTD
+ * 0000000100 0000001000 000000000000  Address of KPT mapping PTD
  *
  * Note: It is helpful to remember that the ONLY difference btw virt and
  * phys addrs in this example is the top four bits are set for vaddrs.
@@ -435,4 +457,156 @@ over_symalloc:
  * imagine this va passing through the hw addr translation algo.
  */
 	fillkpt
+
+/* map I/O memory map */
+
+	movl    _KPTphys-KERNBASE,%ebx		/* base of kernel page tables */
+	lea     (0xa0 * PTESIZE)(%ebx),%ebx	/* hardwire ISA hole at KERNBASE + 0xa0000 */
+										/* PTESIZE = 4 bytes. Hence, 0xa0 * PTESIZE
+										   is equal to the 160th pte */
+	movl	$0x100-0xa0,%ecx			/* for this many pte s (96), */
+	movl	$(0xa0000|PG_V|PG_KW),%eax	/* valid, kernel read/write, non-cacheable */
+	movl	%ebx,_atdevphys-KERNBASE	/* save phys addr of ptes */
+	fillkpt
+
+ /* map proc 0's kernel stack into user page table page */
+
+	movl	$UPAGES,%ecx				/* for this many pte s, */
+	lea	(1*NBPG)(%esi),%eax				/* physical address in proc 0 */
+	lea	(KERNBASE)(%eax),%edx			/* change into virtual addr */
+	movl	%edx,_proc0paddr-KERNBASE	/* save VA for proc 0 init */
+	orl	$PG_V|PG_KW,%eax				/* valid, kernel read/write */
+	lea	((1+UPAGES)*NBPG)(%esi),%ebx	/* addr of stack page table in proc 0 */
+	addl	$(KSTKPTEOFF * PTESIZE),%ebx/* offset to kernel stack PTE */
+										/* KSTKPTEOFF = 1022 */
+	fillkpt
+
+/*
+ * Initialize kernel page table directory
+ */
+	/* install a pde for temporary double map of bottom of VA */
+	movl	_KPTphys-KERNBASE,%eax	/* %eax = pa of base of KPT */
+	orl     $PG_V|PG_KW,%eax		/* valid, kernel read/write */
+	movl	%eax,(%esi)				/* which is where temp maps! */
+									/* Remember that %esi is the base
+									   of the KPD, so moving %eax there
+									   is setting the first pde         */
+	/* initialize kernel pde's */
+	movl	$(NKPT),%ecx			/* for this many (7) PDEs */
+	lea	(KPTDI*PDESIZE)(%esi),%ebx	/* offset of pde for kernel */
+									/* KPTDI = 1023 - 63 = 960  */
+	fillkpt
+
+	/* install a pde recursively mapping page directory as a page table! */
+	movl	%esi,%eax			/* phys address of ptd in proc 0 */
+	orl	$PG_V|PG_KW,%eax		/* pde entry is valid */
+	movl	%eax,PTDPTDI*PDESIZE(%esi)	/* which is where PTmap maps! */
+										/* PTDPTDI = 959 */ 
+
+	/* install a pde to map kernel stack for proc 0 */
+	lea	((1+UPAGES)*NBPG)(%esi),%eax	/* physical address of pt in proc 0 */
+	orl	$PG_V|PG_KW,%eax				/* pde entry is valid */
+	movl	%eax,KSTKPTDI*PDESIZE(%esi)	/* which is where kernel stack maps! */
+										/* KSTKPTDI = 958 */
+
+	/* load base of page directory and enable mapping */
+	movl	%esi,%eax			/* phys address of ptd in proc 0 */
+	movl	%eax,%cr3			/* load ptd addr into mmu */
+	movl	%cr0,%eax			/* get control word */
+	orl	$CR0_PE|CR0_PG,%eax		/* enable paging */
+	movl	%eax,%cr0			/* and let's page NOW! */
+
+	pushl	$begin				/* jump to high mem */
+	ret
+
+begin: /* now running relocated at KERNBASE where the system is linked to run */
+	movl	_atdevphys,%edx			/* get pte PA */
+	subl	_KPTphys,%edx			/* remove base of ptes, now have phys offset */
+	shll	$PGSHIFT-2,%edx			/* corresponding to virt offset */
+	addl	$KERNBASE,%edx			/* add virtual base */
+	movl	%edx,_atdevbase
+
+#include "sc.h"
+#include "vt.h"
+#if NSC > 0 || NVT > 0
+	/* XXX: can't scinit relocate Crtat relative to atdevbase itself? */
+	.globl _Crtat				/* XXX - locore should not know about */
+	movl	_Crtat,%eax			/* variables of device drivers (pccons)! */
+	subl	$(KERNBASE+0xA0000),%eax
+	addl	%eax,%edx
+	movl	%edx,_Crtat
+#endif
+
+	/* set up bootstrap stack - 48 bytes */
+	movl	$_kstack+UPAGES*NBPG-4*12,%esp	/* bootstrap stack end location */
+	xorl	%eax,%eax			/* mark end of frames */
+	movl	%eax,%ebp
+	movl	_proc0paddr,%eax
+	movl	%esi,PCB_CR3(%eax)
+
+#ifdef BDE_DEBUGGER
+	/* relocate debugger gdt entries */
+
+	movl	$_gdt+8*9,%eax			/* adjust slots 9-17 */
+	movl	$9,%ecx
+reloc_gdt:
+	movb	$KERNBASE>>24,7(%eax)		/* top byte of base addresses, was 0, */
+	addl	$8,%eax				/* now KERNBASE>>24 */
+	loop	reloc_gdt
+
+	cmpl	$0,_bdb_exists
+	je	1f
+	int	$3
+1:
+#endif /* BDE_DEBUGGER */
+
+	/*
+	 * Skip over the page tables and the kernel stack
+	 */
+	lea	((1+UPAGES+1+NKPT)*NBPG)(%esi),%esi
+
+	pushl	%esi				/* value of first for init386(first) */
+	call	_init386			/* wire 386 chip for unix operation */
+	popl	%esi
+
+	.globl	__ucodesel,__udatasel
+
+	pushl	$0				/* unused */
+	pushl	__udatasel			/* ss */
+	pushl	$0				/* esp - filled in by execve() */
+	pushl	$PSL_USER			/* eflags (IOPL 0, int enab) */
+	pushl	__ucodesel			/* cs */
+	pushl	$0				/* eip - filled in by execve() */
+	subl	$(12*4),%esp			/* space for rest of registers */
+
+	pushl	%esp				/* call main with frame pointer */
+	call	_main				/* autoconfiguration, mountroot etc */
+
+	addl	$(13*4),%esp			/* back to a frame we can return with */
+
+	/*
+	 * now we've run main() and determined what cpu-type we are, we can
+	 * enable write protection and alignment checking on i486 cpus and
+	 * above.
+	 */
+#if defined(I486_CPU) || defined(I586_CPU)
+	cmpl    $CPUCLASS_386,_cpu_class
+	je	1f
+	movl	%cr0,%eax			/* get control word */
+	orl	$CR0_WP|CR0_AM,%eax		/* enable i486 features */
+	movl	%eax,%cr0			/* and do it */
+#endif
+	/*
+	 * on return from main(), we are process 1
+	 * set up address space and stack so that we can 'return' to user mode
+	 */
+1:
+	movl	__ucodesel,%eax
+	movl	__udatasel,%ecx
+
+	movl	%cx,%ds
+	movl	%cx,%es
+	movl	%ax,%fs				/* double map cs to fs */
+	movl	%cx,%gs				/* and ds to gs */
+	iret					/* goto user! */
 ```
