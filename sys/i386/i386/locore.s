@@ -68,10 +68,23 @@
  * PTmap is recursive pagemap at top of virtual address space.
  * Within PTmap, the page directory can be found (third indirection).
  */
+
+/*
+ * Note that _PTmap, _PTD, and _PTDpde are the results of placing
+ * index 959 into the pg dir offset, pg tbl offset, and block offset
+ * fields of a virtual address.
+ *
+ * Don't let the fancy math confuse you; PTDPTDI * NBPG is another way
+ * of left shifting by 12 bits, or in other words, moving the offset
+ * 959 into the pg tbl offset field (middle 10 bits).
+ *
+ * PTDPTDI * PDESIZE is just scaling the byte offset 959 to a 4 byte
+ * offset.
+ */
 	.globl	_PTmap,_PTD,_PTDpde
-	.set	_PTmap,PTDPTDI << PDRSHIFT
-	.set	_PTD,_PTmap + (PTDPTDI * NBPG)
-	.set	_PTDpde,_PTD + (PTDPTDI * PDESIZE)
+	.set	_PTmap,PTDPTDI << PDRSHIFT			/* _PTmap = EFC00000h */
+	.set	_PTD,_PTmap + (PTDPTDI * NBPG)		/* _PTD = EFFBF000h */
+	.set	_PTDpde,_PTD + (PTDPTDI * PDESIZE)	/* _PTDpde = EFFBFEFCh */ 
 
 /*
  * Sysmap is the base address of the kernel page tables.
@@ -93,7 +106,7 @@
  * per-process address space (at the beginning), immediatly above
  * the user process stack.
  */
-	.set	_kstack,USRSTACK
+	.set	_kstack,USRSTACK	/* _kstack = VM_MAXUSER_ADDRESS */
 	.globl	_kstack
 
 /*
@@ -666,7 +679,7 @@ over_symalloc:
  * 0000000100 0000000100 000000000000
  *                   100 000000000000 +
  * ------------------------------------
- * 0000000111 0000001000 000000000000  Address of KPT mapping PTD
+ * 0000000100 0000001000 000000000000  Address of KPT mapping PTD
  *
  * Note: It is helpful to remember that the ONLY difference btw virt and
  * phys addrs in this example is the top four bits are set for vaddrs.
@@ -804,10 +817,12 @@ begin: /* now running relocated at KERNBASE where the system is linked to run */
 
 	/* set up bootstrap stack - 48 bytes */
 	movl	$_kstack+UPAGES*NBPG-4*12,%esp	/* bootstrap stack end location */
-	xorl	%eax,%eax			/* mark end of frames */
-	movl	%eax,%ebp
+											/* _kstack = VM_MAXUSER_ADDRESS
+											           = EFBFE000h          */
+	xorl	%eax,%eax						/* mark end of frames */
+	movl	%eax,%ebp						/* %ebp = 0 */
 	movl	_proc0paddr,%eax
-	movl	%esi,PCB_CR3(%eax)
+	movl	%esi,PCB_CR3(%eax)				/* Store PTD into proc0's CR3 field */
 
 #ifdef BDE_DEBUGGER
 	/* relocate debugger gdt entries */
@@ -816,7 +831,7 @@ begin: /* now running relocated at KERNBASE where the system is linked to run */
 	movl	$9,%ecx
 reloc_gdt:
 	movb	$KERNBASE>>24,7(%eax)		/* top byte of base addresses, was 0, */
-	addl	$8,%eax				/* now KERNBASE>>24 */
+	addl	$8,%eax						/* now KERNBASE>>24 */
 	loop	reloc_gdt
 
 	cmpl	$0,_bdb_exists
@@ -824,7 +839,6 @@ reloc_gdt:
 	int	$3
 1:
 #endif /* BDE_DEBUGGER */
-
 	/*
 	 * Skip over the page tables and the kernel stack
 	 */
@@ -873,7 +887,7 @@ reloc_gdt:
 	movl	%cx,%es
 	movl	%ax,%fs				/* double map cs to fs */
 	movl	%cx,%gs				/* and ds to gs */
-	iret					/* goto user! */
+	iret						/* goto user! */
 
 #define LCALL(x,y)	.byte 0x9a ; .long y ; .word x
 

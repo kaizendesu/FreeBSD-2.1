@@ -1290,7 +1290,7 @@ sdtossd(sd, ssd)
 void
 init386(first)
 	int first;
-{
+{	/* XXX 48 bytes worth of stack arguments */
 	int x;
 	unsigned biosbasemem, biosextmem;
 	struct gate_descriptor *gdp;
@@ -1300,14 +1300,19 @@ init386(first)
 	int	pagesinbase, pagesinext;
 	int	target_page, pa_indx;
 
+	/*
+	 * In sys/kern/init_main.c:
+	 *
+	 *   struct proc          proc0;
+	 *   extern struct user  *proc0paddr;  // globally def in locore.s
+	 *
+	 * Recall that proc0paddr points to the kernel stack pg in locore.s
+	 */
 	proc0.p_addr = proc0paddr;
-
 	/*
 	 * Initialize the console before we print anything out.
 	 */
-
 	cninit ();
-
 	/*
 	 * make gdt memory segments, the code segment goes up to end of the
 	 * page with etext in it, the data segment goes to the end of
@@ -1395,13 +1400,12 @@ init386(first)
 	if (boothowto & RB_KDB)
 		Debugger("Boot flags requested debugger");
 #endif
-
-	/* Use BIOS values stored in RTC CMOS RAM, since probing
+	/*
+	 * Use BIOS values stored in RTC CMOS RAM, since probing
 	 * breaks certain 386 AT relics.
 	 */
 	biosbasemem = rtcin(RTC_BASELO)+ (rtcin(RTC_BASEHI)<<8);
 	biosextmem = rtcin(RTC_EXTLO)+ (rtcin(RTC_EXTHI)<<8);
-
 	/*
 	 * Print a warning if the official BIOS interface disagrees
 	 * with the hackish interface used above.  Eventually only
@@ -1415,14 +1419,12 @@ init386(first)
 			printf("BIOS extmem (%ldK) != RTC extmem (%dK)\n",
 			       bootinfo.bi_extmem, biosextmem);
 	}
-
 	/*
 	 * If BIOS tells us that it has more than 640k in the basemem,
 	 *	don't believe it - set it to 640k.
 	 */
 	if (biosbasemem > 640)
 		biosbasemem = 640;
-
 	/*
 	 * Some 386 machines might give us a bogus number for extended
 	 *	mem. If this happens, stop now.
@@ -1433,10 +1435,8 @@ init386(first)
 		/* NOTREACHED */
 	}
 #endif
-
 	pagesinbase = biosbasemem * 1024 / NBPG;
 	pagesinext = biosextmem * 1024 / NBPG;
-
 	/*
 	 * Special hack for chipsets that still remap the 384k hole when
 	 *	there's 16MB of memory - this really confuses people that
@@ -1450,19 +1450,17 @@ init386(first)
 	 */
 	if ((pagesinext > 3840) && (pagesinext < 4096))
 		pagesinext = 3840;
-
 	/*
 	 * Maxmem isn't the "maximum memory", it's one larger than the
 	 * highest page of of the physical address space. It
 	 */
-	Maxmem = pagesinext + 0x100000/PAGE_SIZE;
+	Maxmem = pagesinext + 0x100000/PAGE_SIZE;	/* Maxmem = pagesinext + 256 */
 
 #ifdef MAXMEM
 	Maxmem = MAXMEM/4;
 #endif
-
 	/* call pmap initialization to make new kernel address space */
-	pmap_bootstrap (first, 0);
+	pmap_bootstrap(first, 0);
 
 	/*
 	 * Size up each available chunk of physical memory.
@@ -1485,7 +1483,6 @@ init386(first)
 
 	for (target_page = avail_start; target_page < ptoa(Maxmem); target_page += PAGE_SIZE) {
 		int tmp, page_bad = FALSE;
-
 		/*
 		 * map page into kernel: valid, read/write, non-cacheable
 		 */

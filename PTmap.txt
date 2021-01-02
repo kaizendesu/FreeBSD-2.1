@@ -1,0 +1,68 @@
+Example of Using the PTmap to Obtain the PTE of a Random Virtual Address
+
+Definitions:
+
+extern pt_entry_t PTmap[];
+
+#define PG_SHIFT     12
+#define i386_btop(x) ((unsigned)(x) >> PG_SHIFT)
+#define vtopte(x)    (PTmap + i386_btop(x))
+
+Givens:
+
+_PTD = EFC00000h
+
+ va  = 0FC0C5FFh
+
+Process:
+
+1. Express the givens in binary form.
+
+1110111111 0000000000 000000000000   _PTD
+
+0000111111 0000001100 010111111111   va
+
+2. Pass va to vtopte(), which expands to:
+
+PTmap + i386_btop(va)
+
+3. Simplify i386_btop(va) to binary form.
+
+0000000000 0000001111 110000001100   va >> PG_SHIFT
+
+4. Add binary result of i386_btop(va) to PTmap.
+
+Since PTmap is a pt_entry_t array, we need to scale va >> PG_SHIFT
+by sizeof(pt_entry_t), or equivalently, sizeof(unsigned int *).
+
+0000000000 0000111111 000000110000   (va >> PG_SHIFT) * sizeof(pt_entry_t)
+
+Now add the scaled index to PTmap.
+
+1110111111 0000000000 000000000000
+0000000000 0000111111 000000110000 +
+--------------------------------------
+1110111111 0000111111 000000110000   PTmap + (va >> PG_SHIFT) * sizeof(pt_entry_t)
+
+Analysis of Result:
+
+If we look at each field of vtopte(va)'s result, we can walk through the MMU's
+page translation algorithm to determine what this virtual address maps to.
+
+pg dir offset |  pg tbl offset | page offset 
+ 11101111111  |   0000111111   | 000000110000
+
+The pg dir offset simplifies to 959, which is the kernel's recursive PDE that
+points to the pg dir itself. Hence, for the first iteration we will dereference
+the recursive PDE that points to the pg dir.
+
+The pg tbl offset is the original virtual addr's pg dir offset, which means it
+is the entry of the pg dir that maps page tbl pg containing the virtual addr's
+pte. Hence, for the second iteration we will dereference the 63 pde to obtain
+the page tbl pg that contains virtual address's pte.
+
+The page offset is the original virtual addr's pg tbl offset, which means it is
+the entry of the page tbl pg that maps the virtual addr's physical page frame.
+Since this is the last iteration, it will dereference the address of the pte
+in the page tbl pg, or to put it simply, will return the physical address
+of the pte that maps the original virtual address.

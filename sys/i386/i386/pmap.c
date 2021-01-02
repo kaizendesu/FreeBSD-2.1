@@ -184,9 +184,13 @@ pmap_pte(pmap, va)
 {
 
 	if (pmap && *pmap_pde(pmap, va)) {
+				/*  frame = &idlePTD */
 		vm_offset_t frame = (int) pmap->pm_pdir[PTDPTDI] & PG_FRAME;
-
-		/* are we current address space or kernel? */
+		/*
+		 * are we current address space or kernel? Note that
+		 * PTDpde & PG_FRAME is just checking if the frame
+		 * is equal to _PTD.
+		 */
 		if ((pmap == kernel_pmap) || (frame == ((int) PTDpde & PG_FRAME)))
 			return ((pt_entry_t *) vtopte(va));
 		/* otherwise, we are alternate address space */
@@ -445,7 +449,6 @@ pmap_bootstrap(firstaddr, loadaddr)
 
 	*(int *) CMAP1 = *(int *) CMAP2 = *(int *) PTD = 0;
 	pmap_update();
-
 }
 
 /*

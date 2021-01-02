@@ -12,6 +12,7 @@
 ```txt
 File: locore.s
     btext
+        init386
 ```
 
 ## Reading Checklist
@@ -25,6 +26,11 @@ where each function per filename is listed in the order that it is called.
 * The fourth '+' means that I have added it to this document's code walkthrough.
 
 ```txt
+File: locore.s
+    btext           ++-+
+
+File: machdep.c
+    init386         +--+
 ```
 
 ## Important Data Structures
@@ -55,6 +61,53 @@ struct bootinfo {
 	unsigned long		bi_symtab;
 	unsigned long		bi_esymtab;
 };
+```
+
+### *user* Structure
+
+```c
+/* From /sys/sys/user.h */
+
+/*
+ * Per process structure containing data that isn't needed in core
+ * when the process isn't running (esp. when swapped out).
+ * This structure may or may not be at the same kernel address
+ * in all processes.
+ */
+struct	user {
+	struct	pcb u_pcb;
+
+	struct	sigacts u_sigacts;	/* p_sigacts points here (use it!) */
+	struct	pstats u_stats;		/* p_stats points here (use it!) */
+
+	/*
+	 * Remaining fields only for core dump and/or ptrace--
+	 * not valid at other times!
+	 */
+	struct	kinfo_proc u_kproc;	/* proc + eproc */
+	struct	md_coredump u_md;	/* machine dependent glop */
+};
+
+/*
+ * Redefinitions to make the debuggers happy for now...  This subterfuge
+ * brought to you by coredump() and trace_req().  These fields are *only*
+ * valid at those times!
+ */
+#define	U_ar0	u_kproc.kp_proc.p_md.md_regs /* copy of curproc->p_md.md_regs */
+#define	U_tsize	u_kproc.kp_eproc.e_vm.vm_tsize
+#define	U_dsize	u_kproc.kp_eproc.e_vm.vm_dsize
+#define	U_ssize	u_kproc.kp_eproc.e_vm.vm_ssize
+#define	U_sig	u_sigacts.ps_sig
+#define	U_code	u_sigacts.ps_code
+
+#ifndef KERNEL
+#define	u_ar0	U_ar0
+#define	u_tsize	U_tsize
+#define	u_dsize	U_dsize
+#define	u_ssize	U_ssize
+#define	u_sig	U_sig
+#define	u_code	U_code
+#endif /* KERNEL */
 ```
 
 ### Kernel Page Directory and Page Tables
@@ -539,19 +592,20 @@ begin: /* now running relocated at KERNBASE where the system is linked to run */
 
 	/* set up bootstrap stack - 48 bytes */
 	movl	$_kstack+UPAGES*NBPG-4*12,%esp	/* bootstrap stack end location */
-	xorl	%eax,%eax			/* mark end of frames */
-	movl	%eax,%ebp
+											/* _kstack = VM_MAXUSER_ADDRESS
+											           = EFBFE000           */
+	xorl	%eax,%eax						/* mark end of frames */
+	movl	%eax,%ebp						/* %ebp = 0 */
 	movl	_proc0paddr,%eax
-	movl	%esi,PCB_CR3(%eax)
+	movl	%esi,PCB_CR3(%eax)				/* Store PTD into proc0's CR3 */
 
 #ifdef BDE_DEBUGGER
 	/* relocate debugger gdt entries */
-
 	movl	$_gdt+8*9,%eax			/* adjust slots 9-17 */
 	movl	$9,%ecx
 reloc_gdt:
-	movb	$KERNBASE>>24,7(%eax)		/* top byte of base addresses, was 0, */
-	addl	$8,%eax				/* now KERNBASE>>24 */
+	movb	$KERNBASE>>24,7(%eax)	/* top byte of base addresses, was 0, */
+	addl	$8,%eax					/* now KERNBASE>>24 */
 	loop	reloc_gdt
 
 	cmpl	$0,_bdb_exists
@@ -608,5 +662,5 @@ reloc_gdt:
 	movl	%cx,%es
 	movl	%ax,%fs				/* double map cs to fs */
 	movl	%cx,%gs				/* and ds to gs */
-	iret					/* goto user! */
+	iret						/* goto user! */
 ```
