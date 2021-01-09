@@ -13,6 +13,7 @@
 File: locore.s
     btext
         init386
+            pmap_bootstrap
         main
             vm_mem_init
             kmem_init
