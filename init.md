@@ -13,6 +13,15 @@
 File: locore.s
     btext
         init386
+        main
+            vm_mem_init
+            kmem_init
+                vm_set_page_size
+                vm_object_init
+                vm_map_startup
+                kmem_init
+                pmap_init
+                vm_pager_init
 ```
 
 ## Reading Checklist
@@ -27,10 +36,35 @@ where each function per filename is listed in the order that it is called.
 
 ```txt
 File: locore.s
-    btext           ++-+
+    btext               ++-+
 
 File: machdep.c
-    init386         +--+
+    init386             +--+
+
+File: init_main.c
+    main                ----
+
+File: vm_init.c
+    vm_mem_init         ----
+
+File: vm_page.c
+    vm_set_page_size    ----
+
+File: vm_object.c
+    vm_object_init      ----
+
+File: vm_map.c
+    vm_map_startup      ----
+
+File: vm_kern.c
+    kmem_init           ----
+
+File: pmap.c
+    pmap_bootstrap      ----
+    pmap_init           ----
+
+File: vm_pager.c
+    vm_pager_init       ----
 ```
 
 ## Important Data Structures
