@@ -479,11 +479,18 @@ pmap_init(phys_start, phys_end)
 	 * regions which we have mapped in locore.
 	 */
 	addr = atdevbase;
+
+	/* Initialize second static vm_map_entry to be ISA device memory */
 	(void) vm_map_find(kernel_map, NULL, (vm_offset_t) 0,
 	    &addr, (0x100000 - 0xa0000), FALSE);
 
 	addr = (vm_offset_t) KERNBASE + IdlePTD;
 	vm_object_reference(kernel_object);
+	/*
+	 * Initialize third static vm_map_entry to be the idlePTD and
+	 * all addressable KPT pages (not just the 7 static KPT pgs from
+	 * locore.s).
+	 */
 	(void) vm_map_find(kernel_map, kernel_object, addr,
 	    &addr, (4 + NKPDE) * NBPG, FALSE);
 
@@ -491,7 +498,11 @@ pmap_init(phys_start, phys_end)
 	 * calculate the number of pv_entries needed
 	 */
 	vm_first_phys = phys_avail[0];
+
+	/* Set i to the idx of the last page range in phys_avail */
 	for (i = 0; phys_avail[i + 1]; i += 2);
+
+	/*  = phys_avail[2n+1] - phys_avail[0] / NBPG for largest n */
 	npg = (phys_avail[(i - 2) + 1] - vm_first_phys) / NBPG;
 
 	/*

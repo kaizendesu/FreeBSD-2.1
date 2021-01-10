@@ -116,7 +116,7 @@ vm_pager_init()
 	struct pagerops **pgops;
 
 	/*
-	 * Initialize known pagers
+	 * Initialize known pagers: swap, vnode, and device
 	 */
 	for (pgops = pagertab; pgops < &pagertab[npagers]; pgops++)
 		if (pgops)

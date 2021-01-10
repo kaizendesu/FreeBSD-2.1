@@ -66,7 +66,7 @@ File: pmap.c
     pmap_init           ++--
 
 File: vm_pager.c
-    vm_pager_init       ----
+    vm_pager_init       ++--
 ```
 
 ## Important Data Structures

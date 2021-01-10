@@ -115,9 +115,19 @@ vm_mem_init()
 	 */
 	kmem_init(virtual_avail, virtual_end);
 
-	/*   */
+	/* This function:
+	 *   1. Initializes second static vm_map_entry to be ISA device memory 
+	 *   2. Intializes third static vm_map_entry to be the idlePTD and all
+	 *      addressable KPT pages (not just the 7 static pgs from locore.s)
+	 *   3. Allocates the pv_entry array and sets pmap_initialized to TRUE.  
+	 */
 	pmap_init(avail_start, avail_end);
 
-	/*   */
+	/*
+	 * Calls the initializing function for the swap, vnode, and device pagers:
+	 *   vnode_pager_init: initializes tailq on vnode_pager_list
+	 *    swap_pager_init: initializes clean lists & swap alloc constants
+	 *     dev_pager_init: initializes dev_pager_list & dev_pager_fakelist
+ 	 */
 	vm_pager_init();
 }
