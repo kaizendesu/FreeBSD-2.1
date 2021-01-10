@@ -1189,7 +1189,60 @@ init386(first)
 	proc0.p_addr->u_pcb.pcb_ptd = IdlePTD;
 }
 
+/*
+ *	vm_init initializes the virtual memory system.
+ *	This is done only by the first cpu up.
+ *
+ *	The start and end address of physical memory is passed in.
+ */
 
+void
+vm_mem_init()
+{
+	/*
+	 * Initializes resident memory structures. From here on, all physical
+	 * memory is accounted for, and we use only virtual addresses.
+	 */
+	vm_set_page_size();
 
+	/*
+	 * Allocates:
+	 *   1. 2^(log2(total nb of free pgs) + 1) pglists
+	 *   2. 10 vm_maps
+	 *   3. 128 vm_map_entries
+	 *   4. (phys_avail[(nblocks-1)*2+1] - phys_avail[0])/PAGE_SIZE vm_pages
+	 */
+	virtual_avail = vm_page_startup(avail_start, avail_end, virtual_avail);
 
+	/*
+	 * Initialize other VM packages
+	 */
+
+	/* Initializes vm_object cache, kernel_object, and kmem_object */
+	vm_object_init(virtual_end - VM_MIN_KERNEL_ADDRESS);
+
+	/* Links the kernel vm_maps and vm_map_entries together */
+	vm_map_startup();
+	/*
+	 * Initializes the first static vm_map and vm_map_entry to
+	 * represent the kernel image plus all static allocations.
+	 */
+	kmem_init(virtual_avail, virtual_end);
+
+	/* This function:
+	 *   1. Initializes second static vm_map_entry to be ISA device memory 
+	 *   2. Intializes third static vm_map_entry to be the idlePTD and all
+	 *      addressable KPT pages (not just the 7 static pgs from locore.s)
+	 *   3. Allocates the pv_entry array and sets pmap_initialized to TRUE.  
+	 */
+	pmap_init(avail_start, avail_end);
+
+	/*
+	 * Calls the initializing function for the swap, vnode, and device pagers:
+	 *   vnode_pager_init: initializes tailq on vnode_pager_list
+	 *    swap_pager_init: initializes clean lists & swap alloc constants
+	 *     dev_pager_init: initializes dev_pager_list & dev_pager_fakelist
+ 	 */
+	vm_pager_init();
+}
 ```
