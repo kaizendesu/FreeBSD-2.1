@@ -160,24 +160,35 @@ vm_map_startup()
 	 * kernel map or kmem map.  vm_map_create knows how to deal with them.
 	 */
 	kmap_free = mp = (vm_map_t) kentry_data;
+
+	/* Link the kernel vm_maps together */
 	i = MAX_KMAP;
 	while (--i > 0) {
 		mp->header.next = (vm_map_entry_t) (mp + 1);
 		mp++;
 	}
-	mp++->header.next = NULL;
-
+	mp++->header.next = NULL;	/* last kernel vm_map */
 	/*
 	 * Form a free list of statically allocated kernel map entries with
 	 * the rest.
 	 */
 	kentry_free = mep = (vm_map_entry_t) mp;
+
+	/*
+	 * Recall that kentry_data_size is the total size of the MAX_KMAP vm_maps
+	 * and MAX_KMAPENT vm_map_entries.
+	 *
+	 * Hence, to calculate the number of vm_map_entries from kentry_data_size,
+	 * we must subtract the vm_map portion and divide by sizeof(vm_map_entry). 
+	 */
+
+	/* Link the kernel vm_map_entries together */
 	kentry_count = i = (kentry_data_size - MAX_KMAP * sizeof *mp) / sizeof *mep;
 	while (--i > 0) {
 		mep->next = mep + 1;
 		mep++;
 	}
-	mep->next = NULL;
+	mep->next = NULL;	/* last kernel vm_map_entry */
 }
 
 /*

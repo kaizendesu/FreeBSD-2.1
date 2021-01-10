@@ -99,11 +99,18 @@ vm_mem_init()
 	 *   4. (phys_avail[(nblocks-1)*2+1] - phys_avail[0])/PAGE_SIZE vm_pages
 	 */
 	virtual_avail = vm_page_startup(avail_start, avail_end, virtual_avail);
+
 	/*
 	 * Initialize other VM packages
 	 */
+
+	/* Initializes vm_object cache, kernel_object, and kmem_object */
 	vm_object_init(virtual_end - VM_MIN_KERNEL_ADDRESS);
+
+	/* Links the kernel vm_maps and vm_map_entries together */
 	vm_map_startup();
+
+	/*  */
 	kmem_init(virtual_avail, virtual_end);
 	pmap_init(avail_start, avail_end);
 	vm_pager_init();

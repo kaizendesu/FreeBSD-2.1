@@ -174,15 +174,19 @@ vm_object_init(vm_offset_t nothing)
 
 	vm_object_cache_max = 84;
 	if (cnt.v_page_count > 1000)
+		/* Increase cache max by 25% of pages exceeding 1000 */
 		vm_object_cache_max += (cnt.v_page_count - 1000) / 4;
-
+	/*   i = 0; i < 1021; */
 	for (i = 0; i < VM_OBJECT_HASH_COUNT; i++)
 		LIST_INIT(&vm_object_hashtable[i]);
 
 	kernel_object = &kernel_object_store;
+
+	/* kernel_object represents the kernel va space */
 	_vm_object_allocate(VM_MAX_KERNEL_ADDRESS - VM_MIN_KERNEL_ADDRESS,
 	    kernel_object);
 
+	/* kmem_object represents a submap of the kernel va space */
 	kmem_object = &kmem_object_store;
 	_vm_object_allocate(VM_MAX_KERNEL_ADDRESS - VM_MIN_KERNEL_ADDRESS,
 	    kmem_object);
