@@ -372,18 +372,22 @@ pmap_bootstrap(firstaddr, loadaddr)
 	pt_entry_t *pte;
 
 #endif
-
+	/* First free pg frame is 8 pgs after KPT pgs */
 	avail_start = firstaddr + DMAPAGES * NBPG;
 
 	virtual_avail = (vm_offset_t) KERNBASE + avail_start;
+	/*
+	 * VM_MAX_KERNEL_ADDRESS 
+	 *     = (vm_offset_t)KERNBASE+NKPDE*NBPG*NPTEPG)
+	 *     = (KERNBASE + nb of kernel page frames)
+	 *     = ((vm_offset_t)FFC00000)
+	 */
 	virtual_end = VM_MAX_KERNEL_ADDRESS;
-	i386pagesperpage = PAGE_SIZE / NBPG;
-
+	i386pagesperpage = PAGE_SIZE / NBPG;	/* = 1 */
 	/*
 	 * Initialize protection array.
 	 */
 	i386_protection_init();
-
 	/*
 	 * The kernel's pmap is statically allocated so we don't have to use
 	 * pmap_create, which is unlikely to work correctly at this part of
@@ -391,11 +395,11 @@ pmap_bootstrap(firstaddr, loadaddr)
 	 */
 	kernel_pmap = &kernel_pmap_store;
 
+	/* Kernel's PDT is the swapper's PTD */
 	kernel_pmap->pm_pdir = (pd_entry_t *) (KERNBASE + IdlePTD);
-
 	simple_lock_init(&kernel_pmap->pm_lock);
-	kernel_pmap->pm_count = 1;
-	nkpt = NKPT;
+	kernel_pmap->pm_count = 1;	/* increment ref count */
+	nkpt = NKPT;				/* nkpt = 7 */
 
 #if BSDVM_COMPAT
 	/*
@@ -406,7 +410,6 @@ pmap_bootstrap(firstaddr, loadaddr)
 
 	va = virtual_avail;
 	pte = pmap_pte(kernel_pmap, va);
-
 	/*
 	 * Translation:
 	 *
@@ -435,6 +438,10 @@ pmap_bootstrap(firstaddr, loadaddr)
 	    SYSMAP(caddr_t, ptmmap, ptvmmap, 1)
 	    SYSMAP(struct msgbuf *, msgbufmap, msgbufp, 1)
 	    virtual_avail = va;
+	/*
+	 * Hence, the Sysmap is 4 page frames that are used by the VM system.
+	 * They are located 8 pages after the KPT pages.
+	 */
 #endif
 	/*
 	 * Reserve special hunk of memory for use by bus dma as a bounce
@@ -443,10 +450,11 @@ pmap_bootstrap(firstaddr, loadaddr)
 	{
 		isaphysmem = va;
 
+		/* Map the 8 pgs of memory we skipped at the beg of function */
 		virtual_avail = pmap_map(va, firstaddr,
 		    firstaddr + DMAPAGES * NBPG, VM_PROT_ALL);
 	}
-
+	/* Initialize Sysmap entries as invalid */
 	*(int *) CMAP1 = *(int *) CMAP2 = *(int *) PTD = 0;
 	pmap_update();
 }

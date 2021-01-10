@@ -1403,7 +1403,14 @@ init386(first)
 	/*
 	 * Use BIOS values stored in RTC CMOS RAM, since probing
 	 * breaks certain 386 AT relics.
+	 *
+	 * rtcin() is located in locore.s and the RTC_* values are
+	 * defined in /usr/src/sys.386bsd/i386/isa/rtc.h (real time clock header).
+	 * These values are also found in the IBM Technical Reference PC AT.
 	 */
+
+	/* RTC_BASELO = 0x15, RTC_BASEHI = 0x16 
+       RTC_EXTLO = 0x17, RTC_EXTHI = 0x18 */
 	biosbasemem = rtcin(RTC_BASELO)+ (rtcin(RTC_BASEHI)<<8);
 	biosextmem = rtcin(RTC_EXTLO)+ (rtcin(RTC_EXTHI)<<8);
 	/*
@@ -1422,6 +1429,9 @@ init386(first)
 	/*
 	 * If BIOS tells us that it has more than 640k in the basemem,
 	 *	don't believe it - set it to 640k.
+	 *
+	 *	Conventional memory must be 640k bc memory hole is 384k,
+	 *	where 640k + 384k = 1024k = 1MiB.
 	 */
 	if (biosbasemem > 640)
 		biosbasemem = 640;
@@ -1435,6 +1445,7 @@ init386(first)
 		/* NOTREACHED */
 	}
 #endif
+	/* Convert KiB values to page numbers */
 	pagesinbase = biosbasemem * 1024 / NBPG;
 	pagesinext = biosextmem * 1024 / NBPG;
 	/*
@@ -1454,12 +1465,22 @@ init386(first)
 	 * Maxmem isn't the "maximum memory", it's one larger than the
 	 * highest page of of the physical address space. It
 	 */
-	Maxmem = pagesinext + 0x100000/PAGE_SIZE;	/* Maxmem = pagesinext + 256 */
+	Maxmem = pagesinext + 0x100000/PAGE_SIZE;	/* Maxmem = pagesinext + 256 
+												          = pagesinext + 1MiB */
 
 #ifdef MAXMEM
 	Maxmem = MAXMEM/4;
 #endif
-	/* call pmap initialization to make new kernel address space */
+	/*
+	 * call pmap initialization to make new kernel address space 
+	 *
+	 * This function does the following: 
+	 *    1. Initializes the static kernel pmap struct 
+	 *    2. Maps 8 contiguous page frames following the KPT pages
+	 *       as DMA memory. (contiguous va's and pa's)
+	 *    3. Maps the 4 subsequent page frames for the Sysmap,
+	 *       which is CMAP1, CMAP2, CADDR1, CADDR2, etc.
+	 */
 	pmap_bootstrap(first, 0);
 
 	/*

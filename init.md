@@ -40,7 +40,7 @@ File: locore.s
     btext               ++-+
 
 File: machdep.c
-    init386             +--+
+    init386             ++-+
 
 File: init_main.c
     main                ----
@@ -61,7 +61,7 @@ File: vm_kern.c
     kmem_init           ----
 
 File: pmap.c
-    pmap_bootstrap      ----
+    pmap_bootstrap      ++-+
     pmap_init           ----
 
 File: vm_pager.c
