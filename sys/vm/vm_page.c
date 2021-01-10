@@ -183,7 +183,10 @@ vm_page_startup(starta, enda, vaddr)
 		phys_avail[i + 1] = trunc_page(phys_avail[i + 1]);
 	}
 
-	/* Obtain the idx of the largest range of free pgs */
+	/*
+	 * Calculates the total amount of free physical memory
+	 * and obtains the idx of the largest range of pages.
+	 */
 	for (i = 0; phys_avail[i + 1]; i += 2) {
 		int size = phys_avail[i + 1] - phys_avail[i];
 
@@ -196,7 +199,6 @@ vm_page_startup(starta, enda, vaddr)
 	}
 
 	start = phys_avail[biggestone];
-
 	/*
 	 * Initialize the locks
 	 */
@@ -261,7 +263,7 @@ vm_page_startup(starta, enda, vaddr)
 	 * shouldn't be cluttering up the kernel map (they should use their
 	 * own maps).
 	 */
-
+				/*   = 10 vm_maps + 128 vm_map_entries  */
 	kentry_data_size = MAX_KMAP * sizeof(struct vm_map) +
 	    MAX_KMAPENT * sizeof(struct vm_map_entry);
 	kentry_data_size = round_page(kentry_data_size);
@@ -289,6 +291,8 @@ vm_page_startup(starta, enda, vaddr)
 	last_page = phys_avail[(nblocks - 1) * 2 + 1] / PAGE_SIZE;
 
 	page_range = last_page - (phys_avail[0] / PAGE_SIZE);
+
+	/* npages = total pgs - vm_page structs - pgs allocated in this function */
 	npages = (total - (page_range * sizeof(struct vm_page)) -
 	    (start - phys_avail[biggestone])) / PAGE_SIZE;
 
@@ -318,8 +322,11 @@ vm_page_startup(starta, enda, vaddr)
 	bzero((caddr_t) vm_page_array, page_range * sizeof(struct vm_page));
 	vm_page_array_size = page_range;
 
+	/* Update vmmeter statistics */
 	cnt.v_page_count = 0;
 	cnt.v_free_count = 0;
+
+	/* Link vm_page structures with their page frames */
 	for (i = 0; phys_avail[i + 1] && npages > 0; i += 2) {
 		if (i == biggestone)
 			pa = ptoa(first_managed_page);
@@ -328,6 +335,7 @@ vm_page_startup(starta, enda, vaddr)
 		while (pa < phys_avail[i + 1] && npages-- > 0) {
 			++cnt.v_page_count;
 			++cnt.v_free_count;
+			/*= &vm_page_array[atop(pa)-first_page */
 			m = PHYS_TO_VM_PAGE(pa);
 			m->flags = PG_FREE;
 			m->phys_addr = pa;

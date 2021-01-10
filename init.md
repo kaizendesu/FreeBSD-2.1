@@ -46,11 +46,11 @@ File: machdep.c
     cpu_startup         ----
 
 File: vm_init.c
-    vm_mem_init         ++--
+    vm_mem_init         ++-+
 
 File: vm_page.c
     vm_set_page_size    ++--
-    vm_page_startup     ----
+    vm_page_startup     ++--
 
 File: vm_object.c
     vm_object_init      ----

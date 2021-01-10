@@ -90,6 +90,14 @@ vm_mem_init()
 	 * memory is accounted for, and we use only virtual addresses.
 	 */
 	vm_set_page_size();
+
+	/*
+	 * Allocates:
+	 *   1. 2^(log2(total nb of free pgs) + 1) pglists
+	 *   2. 10 vm_maps
+	 *   3. 128 vm_map_entries
+	 *   4. (phys_avail[(nblocks-1)*2+1] - phys_avail[0])/PAGE_SIZE vm_pages
+	 */
 	virtual_avail = vm_page_startup(avail_start, avail_end, virtual_avail);
 	/*
 	 * Initialize other VM packages
