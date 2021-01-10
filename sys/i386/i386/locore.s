@@ -851,17 +851,17 @@ reloc_gdt:
 	.globl	__ucodesel,__udatasel
 
 	pushl	$0				/* unused */
-	pushl	__udatasel			/* ss */
+	pushl	__udatasel		/* ss */
 	pushl	$0				/* esp - filled in by execve() */
-	pushl	$PSL_USER			/* eflags (IOPL 0, int enab) */
-	pushl	__ucodesel			/* cs */
+	pushl	$PSL_USER		/* eflags (IOPL 0, int enab) */
+	pushl	__ucodesel		/* cs */
 	pushl	$0				/* eip - filled in by execve() */
-	subl	$(12*4),%esp			/* space for rest of registers */
+	subl	$(12*4),%esp	/* space for rest of registers */
 
-	pushl	%esp				/* call main with frame pointer */
-	call	_main				/* autoconfiguration, mountroot etc */
+	pushl	%esp			/* call main with frame pointer */
+	call	_main			/* autoconfiguration, mountroot etc */
 
-	addl	$(13*4),%esp			/* back to a frame we can return with */
+	addl	$(13*4),%esp	/* back to a frame we can return with */
 
 	/*
 	 * now we've run main() and determined what cpu-type we are, we can

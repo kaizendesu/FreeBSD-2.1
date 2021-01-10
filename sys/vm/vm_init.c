@@ -89,7 +89,6 @@ vm_mem_init()
 	 * Initializes resident memory structures. From here on, all physical
 	 * memory is accounted for, and we use only virtual addresses.
 	 */
-
 	vm_set_page_size();
 	virtual_avail = vm_page_startup(avail_start, avail_end, virtual_avail);
 	/*

@@ -18,11 +18,13 @@ File: locore.s
             vm_mem_init
             kmem_init
                 vm_set_page_size
+                vm_page_startup
                 vm_object_init
                 vm_map_startup
                 kmem_init
                 pmap_init
                 vm_pager_init
+            cpu_startup
 ```
 
 ## Reading Checklist
@@ -41,31 +43,30 @@ File: locore.s
 
 File: machdep.c
     init386             ++-+
-
-File: init_main.c
-    main                ++--
+    cpu_startup         ----
 
 File: vm_init.c
-    vm_mem_init         ----
+    vm_mem_init         ++--
 
 File: vm_page.c
-    vm_set_page_size    ----
+    vm_set_page_size    ++--
+    vm_page_startup     ++--
 
 File: vm_object.c
-    vm_object_init      ----
+    vm_object_init      ++--
 
 File: vm_map.c
-    vm_map_startup      ----
+    vm_map_startup      ++--
 
 File: vm_kern.c
-    kmem_init           ----
+    kmem_init           ++--
 
 File: pmap.c
     pmap_bootstrap      ++--
     pmap_init           ----
 
 File: vm_pager.c
-    vm_pager_init       ----
+    vm_pager_init       ++--
 ```
 
 ## Important Data Structures
@@ -148,6 +149,115 @@ struct	user {
 ### Kernel Page Directory and Page Tables
 
 ```txt
+    Kernel Pg Tbls        
+__________________________
+|                        |
+| KPT 7                  |
+|________________________|
+|                        |
+| KPT 6                  |
+|________________________|
+|                        |
+| KPT 5                  |
+|________________________|
+|                        |
+| KPT 4                  |
+|________________________|                                       Kernel Pg Dir
+|                        |                                  ________________________
+| KPT 3                  |                                  |                      |
+|________________________|                                  |        KPT 7         |
+|                        |                                  |______________________| 965
+| KPT 2                  |                                  |                      |
+|________________________|                                  |        KPT 6         |
+|                        |                                  |______________________| 964
+| KPT 1                  |                                  |                      |
+|________________________|                                  |        KPT 5         |
+|                        |                                  |______________________| 963 
+| proc0 Stack            |                                  |                      |
+|________________________| %esi + 3*PGSIZE                  |        KPT 4         |
+|                        |                                  |______________________| 962
+| UPAGE 2                |                                  |                      |
+|________________________| %esi + 2*PGSIZE                  |        KPT 3         |
+|                        |                                  |______________________| 961
+| UPAGE 1                |                                  |                      |
+|________________________| %esi + 1*PGSIZE                  |        KPT 2         |
+|                        |                                  |______________________| 960
+| Kernel Page Dir        |                                  |                      |
+|________________________| %esi                             |        KPT 1         |
+|                        | (KERNEND-KERNBASE)/PGSIZE - 1    |______________________| 959
+| Kernel Data/BSS (cont) |                                  |                      |
+|________________________| 256                              | Recursive KPD Entry  |
+|                        | 255                              |______________________| 958
+| I/O Memory Map         |                                  |                      |
+|________________________| 159                              |    Kernel Stack      |
+|                        | 158                              |______________________| 957
+| Kernel Data/BSS        |                                  |\\\\\\\\\\\\\\\\\\\\\\|
+|________________________| (_etext-KERNBASE)/PGSIZE         |______________________|
+|                        | (_etext-KERNBASE)/PGSIZE - 1     |                      |
+| Kernel Text            |                                  |        KPT 1         |
+|________________________| 0                                |______________________| 0
+```
+
+### *vmmeter* Structure
+
+```c
+/* From sys/sys/vmmeter.h */
+
+/*
+ * System wide statistics counters.
+ */
+struct vmmeter {
+	/*
+	 * General system activity.
+	 */
+	unsigned v_swtch;	/* context switches */
+	unsigned v_trap;	/* calls to trap */
+	unsigned v_syscall;	/* calls to syscall() */
+	unsigned v_intr;	/* device interrupts */
+	unsigned v_soft;	/* software interrupts */
+	/*
+	 * Virtual memory activity.
+	 */
+	unsigned v_vm_faults;	/* number of address memory faults */
+	unsigned v_cow_faults;	/* number of copy-on-writes */
+	unsigned v_zfod;	/* pages zero filled on demand */
+	unsigned v_swapin;	/* swap pager pageins */
+	unsigned v_swapout;	/* swap pager pageouts */
+	unsigned v_swappgsin;	/* swap pager pages paged in */
+	unsigned v_swappgsout;	/* swap pager pages paged out */
+	unsigned v_vnodein;	/* vnode pager pageins */
+	unsigned v_vnodeout;	/* vnode pager pageouts */
+	unsigned v_vnodepgsin;	/* vnode_pager pages paged in */
+	unsigned v_vnodepgsout;	/* vnode pager pages paged out */
+	unsigned v_intrans;	/* intransit blocking page faults */
+	unsigned v_reactivated;	/* number of pages reactivated from free list */
+	unsigned v_pdwakeups;	/* number of times daemon has awaken from sleep */
+	unsigned v_pdpages;	/* number of pages analyzed by daemon */
+	unsigned v_dfree;	/* pages freed by daemon */
+	unsigned v_pfree;	/* pages freed by exiting processes */
+	unsigned v_tfree;	/* total pages freed */
+	/*
+	 * Distribution of page usages.
+	 */
+	unsigned v_page_size;	/* page size in bytes */
+	unsigned v_page_count;	/* total number of pages in system */
+	unsigned v_free_reserved; /* number of pages reserved for deadlock */
+	unsigned v_free_target;	/* number of pages desired free */
+	unsigned v_free_min;	/* minimum number of pages desired free */
+	unsigned v_free_count;	/* number of pages free */
+	unsigned v_wire_count;	/* number of pages wired down */
+	unsigned v_active_count;/* number of pages active */
+	unsigned v_inactive_target; /* number of pages desired inactive */
+	unsigned v_inactive_count;  /* number of pages inactive */
+	unsigned v_cache_count;		/* number of pages on buffer cache queue */
+	unsigned v_cache_min;		/* min number of pages desired on cache queue */
+	unsigned v_cache_max;		/* max number of pages in cached obj */
+	unsigned v_pageout_free_min;	/* min number pages reserved for kernel */
+	unsigned v_interrupt_free_min;	/* reserved number of pages for int code */
+};
+#ifdef KERNEL
+struct	vmmeter cnt;
+#endif
 ```
 
 ## Code Walkthrough
