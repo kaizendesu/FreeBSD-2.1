@@ -109,9 +109,15 @@ vm_mem_init()
 
 	/* Links the kernel vm_maps and vm_map_entries together */
 	vm_map_startup();
-
-	/*  */
+	/*
+	 * Initializes the first static vm_map and vm_map_entry to
+	 * represent the kernel image plus all static allocations.
+	 */
 	kmem_init(virtual_avail, virtual_end);
+
+	/*   */
 	pmap_init(avail_start, avail_end);
+
+	/*   */
 	vm_pager_init();
 }

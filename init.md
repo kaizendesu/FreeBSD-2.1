@@ -56,14 +56,14 @@ File: vm_object.c
     vm_object_init      ++--
 
 File: vm_map.c
-    vm_map_startup      ----
+    vm_map_startup      ++--
 
 File: vm_kern.c
-    kmem_init           ----
+    kmem_init           ++--
 
 File: pmap.c
     pmap_bootstrap      ++--
-    pmap_init           ----
+    pmap_init           ++--
 
 File: vm_pager.c
     vm_pager_init       ----

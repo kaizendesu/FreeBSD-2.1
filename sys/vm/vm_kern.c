@@ -461,10 +461,18 @@ kmem_init(start, end)
 {
 	register vm_map_t m;
 
+	/*
+	 * Initialize the first static vm_map as the kernel image plus all
+	 * static allocations.
+	 */
 	m = vm_map_create(kernel_pmap, VM_MIN_KERNEL_ADDRESS, end, FALSE);
 	vm_map_lock(m);
 	/* N.B.: cannot use kgdb to debug, starting with this assignment ... */
 	kernel_map = m;
+	/*
+	 * Initialize the first static vm_map_entry as the kernel image
+	 * plus all static allocations.
+	 */
 	(void) vm_map_insert(m, NULL, (vm_offset_t) 0,
 	    VM_MIN_KERNEL_ADDRESS, start);
 	/* ... and ending with the completion of the above `insert' */
