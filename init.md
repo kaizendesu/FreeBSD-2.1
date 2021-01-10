@@ -43,7 +43,7 @@ File: machdep.c
     init386             ++-+
 
 File: init_main.c
-    main                ----
+    main                ++--
 
 File: vm_init.c
     vm_mem_init         ----
@@ -61,7 +61,7 @@ File: vm_kern.c
     kmem_init           ----
 
 File: pmap.c
-    pmap_bootstrap      ++-+
+    pmap_bootstrap      ++--
     pmap_init           ----
 
 File: vm_pager.c
@@ -698,4 +698,388 @@ reloc_gdt:
 	movl	%ax,%fs				/* double map cs to fs */
 	movl	%cx,%gs				/* and ds to gs */
 	iret						/* goto user! */
+
+void
+init386(first)
+	int first;
+{	/* XXX 48 bytes worth of stack arguments */
+	int x;
+	unsigned biosbasemem, biosextmem;
+	struct gate_descriptor *gdp;
+	int gsel_tss;
+	/* table descriptors - used to load tables by microp */
+	struct region_descriptor r_gdt, r_idt;
+	int	pagesinbase, pagesinext;
+	int	target_page, pa_indx;
+
+	/*
+	 * In sys/kern/init_main.c:
+	 *
+	 *   struct proc          proc0;
+	 *   extern struct user  *proc0paddr;  // globally def in locore.s
+	 *
+	 * Recall that proc0paddr points to the kernel stack pg in locore.s
+	 */
+	proc0.p_addr = proc0paddr;
+	/*
+	 * Initialize the console before we print anything out.
+	 */
+	cninit ();
+	/*
+	 * make gdt memory segments, the code segment goes up to end of the
+	 * page with etext in it, the data segment goes to the end of
+	 * the address space
+	 */
+	/*
+	 * XXX text protection is temporarily (?) disabled.  The limit was
+	 * i386_btop(i386_round_page(etext)) - 1.
+	 */
+	gdt_segs[GCODE_SEL].ssd_limit = i386_btop(0) - 1;
+	gdt_segs[GDATA_SEL].ssd_limit = i386_btop(0) - 1;
+	for (x = 0; x < NGDT; x++)
+		ssdtosd(&gdt_segs[x], &gdt[x].sd);
+
+	/* make ldt memory segments */
+	/*
+	 * The data segment limit must not cover the user area because we
+	 * don't want the user area to be writable in copyout() etc. (page
+	 * level protection is lost in kernel mode on 386's).  Also, we
+	 * don't want the user area to be writable directly (page level
+	 * protection of the user area is not available on 486's with
+	 * CR0_WP set, because there is no user-read/kernel-write mode).
+	 *
+	 * XXX - VM_MAXUSER_ADDRESS is an end address, not a max.  And it
+	 * should be spelled ...MAX_USER...
+	 */
+#define VM_END_USER_RW_ADDRESS	VM_MAXUSER_ADDRESS
+	/*
+	 * The code segment limit has to cover the user area until we move
+	 * the signal trampoline out of the user area.  This is safe because
+	 * the code segment cannot be written to directly.
+	 */
+#define VM_END_USER_R_ADDRESS	(VM_END_USER_RW_ADDRESS + UPAGES * NBPG)
+	ldt_segs[LUCODE_SEL].ssd_limit = i386_btop(VM_END_USER_R_ADDRESS) - 1;
+	ldt_segs[LUDATA_SEL].ssd_limit = i386_btop(VM_END_USER_RW_ADDRESS) - 1;
+	/* Note. eventually want private ldts per process */
+	for (x = 0; x < NLDT; x++)
+		ssdtosd(&ldt_segs[x], &ldt[x].sd);
+
+	/* exceptions */
+	for (x = 0; x < NIDT; x++)
+		setidt(x, &IDTVEC(rsvd), SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(0, &IDTVEC(div),  SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(1, &IDTVEC(dbg),  SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(2, &IDTVEC(nmi),  SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+ 	setidt(3, &IDTVEC(bpt),  SDT_SYS386TGT, SEL_UPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(4, &IDTVEC(ofl),  SDT_SYS386TGT, SEL_UPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(5, &IDTVEC(bnd),  SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(6, &IDTVEC(ill),  SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(7, &IDTVEC(dna),  SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(8, 0,  SDT_SYSTASKGT, SEL_KPL, GSEL(GPANIC_SEL, SEL_KPL));
+	setidt(9, &IDTVEC(fpusegm),  SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(10, &IDTVEC(tss),  SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(11, &IDTVEC(missing),  SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(12, &IDTVEC(stk),  SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(13, &IDTVEC(prot),  SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(14, &IDTVEC(page),  SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(15, &IDTVEC(rsvd),  SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(16, &IDTVEC(fpu),  SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+	setidt(17, &IDTVEC(align), SDT_SYS386TGT, SEL_KPL, GSEL(GCODE_SEL, SEL_KPL));
+#if defined(COMPAT_LINUX) || defined(LINUX)
+ 	setidt(0x80, &IDTVEC(linux_syscall),  SDT_SYS386TGT, SEL_UPL, GSEL(GCODE_SEL, SEL_KPL));
+#endif
+
+#include	"isa.h"
+#if	NISA >0
+	isa_defaultirq();
+#endif
+	rand_initialize();
+
+	r_gdt.rd_limit = sizeof(gdt) - 1;
+	r_gdt.rd_base =  (int) gdt;
+	lgdt(&r_gdt);
+
+	r_idt.rd_limit = sizeof(idt) - 1;
+	r_idt.rd_base = (int) idt;
+	lidt(&r_idt);
+
+	_default_ldt = GSEL(GLDT_SEL, SEL_KPL);
+	lldt(_default_ldt);
+	currentldt = _default_ldt;
+
+#ifdef DDB
+	kdb_init();
+	if (boothowto & RB_KDB)
+		Debugger("Boot flags requested debugger");
+#endif
+	/*
+	 * Use BIOS values stored in RTC CMOS RAM, since probing
+	 * breaks certain 386 AT relics.
+	 *
+	 * rtcin() is located in locore.s and the RTC_* values are
+	 * defined in /usr/src/sys.386bsd/i386/isa/rtc.h (real time clock header).
+	 * These values are also found in the IBM Technical Reference PC AT.
+	 */
+
+	/* RTC_BASELO = 0x15, RTC_BASEHI = 0x16 
+       RTC_EXTLO = 0x17, RTC_EXTHI = 0x18 */
+	biosbasemem = rtcin(RTC_BASELO)+ (rtcin(RTC_BASEHI)<<8);
+	biosextmem = rtcin(RTC_EXTLO)+ (rtcin(RTC_EXTHI)<<8);
+	/*
+	 * Print a warning if the official BIOS interface disagrees
+	 * with the hackish interface used above.  Eventually only
+	 * the official interface should be used.
+	 */
+	if (bootinfo.bi_memsizes_valid) {
+		if (bootinfo.bi_basemem != biosbasemem)
+			printf("BIOS basemem (%ldK) != RTC basemem (%dK)\n",
+			       bootinfo.bi_basemem, biosbasemem);
+		if (bootinfo.bi_extmem != biosextmem)
+			printf("BIOS extmem (%ldK) != RTC extmem (%dK)\n",
+			       bootinfo.bi_extmem, biosextmem);
+	}
+	/*
+	 * If BIOS tells us that it has more than 640k in the basemem,
+	 *	don't believe it - set it to 640k.
+	 *
+	 *	Conventional memory must be 640k bc memory hole is 384k,
+	 *	where 640k + 384k = 1024k = 1MiB.
+	 */
+	if (biosbasemem > 640)
+		biosbasemem = 640;
+	/*
+	 * Some 386 machines might give us a bogus number for extended
+	 *	mem. If this happens, stop now.
+	 */
+#ifndef LARGEMEM
+	if (biosextmem > 65536) {
+		panic("extended memory beyond limit of 64MB");
+		/* NOTREACHED */
+	}
+#endif
+	/* Convert KiB values to page numbers */
+	pagesinbase = biosbasemem * 1024 / NBPG;
+	pagesinext = biosextmem * 1024 / NBPG;
+	/*
+	 * Special hack for chipsets that still remap the 384k hole when
+	 *	there's 16MB of memory - this really confuses people that
+	 *	are trying to use bus mastering ISA controllers with the
+	 *	"16MB limit"; they only have 16MB, but the remapping puts
+	 *	them beyond the limit.
+	 */
+	/*
+	 * If extended memory is between 15-16MB (16-17MB phys address range),
+	 *	chop it to 15MB.
+	 */
+	if ((pagesinext > 3840) && (pagesinext < 4096))
+		pagesinext = 3840;
+	/*
+	 * Maxmem isn't the "maximum memory", it's one larger than the
+	 * highest page of of the physical address space. It
+	 */
+	Maxmem = pagesinext + 0x100000/PAGE_SIZE;	/* Maxmem = pagesinext + 256 
+												          = pagesinext + 1MiB */
+
+#ifdef MAXMEM
+	Maxmem = MAXMEM/4;
+#endif
+	/*
+	 * call pmap initialization to make new kernel address space 
+	 *
+	 * This function does the following: 
+	 *    1. Initializes the static kernel pmap struct 
+	 *    2. Maps 8 contiguous page frames following the KPT pages
+	 *       as DMA memory. (contiguous va's and pa's)
+	 *    3. Maps the 4 subsequent page frames for the Sysmap,
+	 *       which is CMAP1, CMAP2, CADDR1, CADDR2, etc.
+	 */
+	pmap_bootstrap(first, 0);
+
+	/*
+	 * Size up each available chunk of physical memory.
+	 */
+
+	/*
+	 * We currently don't bother testing base memory.
+	 * XXX  ...but we probably should.
+	 */
+	pa_indx = 0;
+	badpages = 0;
+
+	/*
+	 * phys_avail is a mem map where each entry contains the end address of
+	 * a contiguous range of good pages. It has 10 entries, where means
+	 * there can only be 9 holes in memory.
+	 */
+	if (pagesinbase > 1) {
+		phys_avail[pa_indx++] = PAGE_SIZE;		/* skip first page of memory */
+		phys_avail[pa_indx] = ptoa(pagesinbase);/* memory up to the ISA hole */
+		physmem = pagesinbase - 1;
+	} else {
+		/* point at first chunk end */
+		pa_indx++;
+	}
+
+	/*
+	 * Using the Sysmap ptes, we check the bits of every free page of
+	 * memory in the system and identify any bad pages.
+	 *
+	 * Recall that avail_start is the first page frame following the
+	 * DMA pages.
+	 */
+	for (target_page = avail_start; target_page < ptoa(Maxmem); target_page += PAGE_SIZE) {
+		int tmp, page_bad = FALSE;
+		/*
+		 * map page into kernel: valid, read/write, non-cacheable
+		 */
+		*(int *)CMAP1 = PG_V | PG_KW | PG_N | target_page;
+		pmap_update();
+
+		tmp = *(int *)CADDR1;
+		/*
+		 * Test for alternating 1's and 0's
+		 */
+		*(int *)CADDR1 = 0xaaaaaaaa;
+		if (*(int *)CADDR1 != 0xaaaaaaaa) {
+			page_bad = TRUE;
+		}
+		/*
+		 * Test for alternating 0's and 1's
+		 */
+		*(int *)CADDR1 = 0x55555555;
+		if (*(int *)CADDR1 != 0x55555555) {
+			page_bad = TRUE;
+		}
+		/*
+		 * Test for all 1's
+		 */
+		*(int *)CADDR1 = 0xffffffff;
+		if (*(int *)CADDR1 != 0xffffffff) {
+			page_bad = TRUE;
+		}
+		/*
+		 * Test for all 0's
+		 */
+		*(int *)CADDR1 = 0x0;
+		if (*(int *)CADDR1 != 0x0) {
+			/*
+			 * test of page failed
+			 */
+			page_bad = TRUE;
+		}
+		/*
+		 * Restore original value.
+		 */
+		*(int *)CADDR1 = tmp;
+
+		/*
+		 * Adjust array of valid/good pages.
+		 */
+		if (page_bad == FALSE) {
+			/*
+			 * If this good page is a continuation of the
+			 * previous set of good pages, then just increase
+			 * the end pointer. Otherwise start a new chunk.
+			 * Note that "end" points one higher than end,
+			 * making the range >= start and < end.
+			 */
+			if (phys_avail[pa_indx] == target_page) {
+				phys_avail[pa_indx] += PAGE_SIZE;
+			} else {
+				pa_indx++;
+				if (pa_indx == PHYS_AVAIL_ARRAY_END) {
+					printf("Too many holes in the physical address space, giving up\n");
+					pa_indx--;
+					break;
+				}
+				phys_avail[pa_indx++] = target_page;	/* start */
+				phys_avail[pa_indx] = target_page + PAGE_SIZE;	/* end */
+			}
+			physmem++;
+		} else {
+			badpages++;
+			page_bad = FALSE;
+		}
+	}
+
+	*(int *)CMAP1 = 0;
+	pmap_update();
+
+	/*
+	 * XXX
+	 * The last chunk must contain at least one page plus the message
+	 * buffer to avoid complicating other code (message buffer address
+	 * calculation, etc.).
+	 *
+	 * Or in other words, this code ensures that the last entry in the
+	 * phys_avail map is large enough so that the end addr of the
+	 * penultimate entry + msgbuf struct + PAGE_SIZE does NOT overlap
+	 * with the end address of the final entry.
+	 */
+	while (phys_avail[pa_indx - 1] + PAGE_SIZE +
+	    round_page(sizeof(struct msgbuf)) >= phys_avail[pa_indx]) {
+		physmem -= atop(phys_avail[pa_indx] - phys_avail[pa_indx - 1]);
+		phys_avail[pa_indx--] = 0;
+		phys_avail[pa_indx--] = 0;
+	}
+
+	Maxmem = atop(phys_avail[pa_indx]);
+
+	/* Trim off space for the message buffer. */
+	phys_avail[pa_indx] -= round_page(sizeof(struct msgbuf));
+
+	/* Free memory ends at the msgbuf */
+	avail_end = phys_avail[pa_indx];
+
+	/* now running on new page tables, configured,and u/iom is accessible */
+
+	/* make a initial tss so microp can get interrupt stack on syscall! */
+	proc0.p_addr->u_pcb.pcb_tss.tss_esp0 = (int) kstack + UPAGES*NBPG;
+	proc0.p_addr->u_pcb.pcb_tss.tss_ss0 = GSEL(GDATA_SEL, SEL_KPL) ;
+	gsel_tss = GSEL(GPROC0_SEL, SEL_KPL);
+
+	dblfault_tss.tss_esp = dblfault_tss.tss_esp0 = dblfault_tss.tss_esp1 =
+	    dblfault_tss.tss_esp2 = (int) &dblfault_stack[sizeof(dblfault_stack)];
+	dblfault_tss.tss_ss = dblfault_tss.tss_ss0 = dblfault_tss.tss_ss1 =
+	    dblfault_tss.tss_ss2 = GSEL(GDATA_SEL, SEL_KPL);
+	dblfault_tss.tss_cr3 = IdlePTD;
+	dblfault_tss.tss_eip = (int) dblfault_handler;
+	dblfault_tss.tss_eflags = PSL_KERNEL;
+	dblfault_tss.tss_ds = dblfault_tss.tss_es = dblfault_tss.tss_fs = dblfault_tss.tss_gs =
+		GSEL(GDATA_SEL, SEL_KPL);
+	dblfault_tss.tss_cs = GSEL(GCODE_SEL, SEL_KPL);
+	dblfault_tss.tss_ldt = GSEL(GLDT_SEL, SEL_KPL);
+
+	((struct i386tss *)gdt_segs[GPROC0_SEL].ssd_base)->tss_ioopt =
+		(sizeof(struct i386tss))<<16;
+
+	/* ltr = Load the Task Register */
+	ltr(gsel_tss);
+
+	/* make a call gate to reenter kernel with */
+	gdp = &ldt[LSYS5CALLS_SEL].gd;
+
+	x = (int) &IDTVEC(syscall);
+	gdp->gd_looffset = x++;
+	gdp->gd_selector = GSEL(GCODE_SEL,SEL_KPL);
+	gdp->gd_stkcpy = 1;
+	gdp->gd_type = SDT_SYS386CGT;
+	gdp->gd_dpl = SEL_UPL;
+	gdp->gd_p = 1;
+	gdp->gd_hioffset = ((int) &IDTVEC(syscall)) >>16;
+
+	/* transfer to user mode */
+
+	_ucodesel = LSEL(LUCODE_SEL, SEL_UPL);
+	_udatasel = LSEL(LUDATA_SEL, SEL_UPL);
+
+	/* setup proc 0's pcb */
+	bcopy(&sigcode, proc0.p_addr->u_pcb.pcb_sigc, szsigcode);
+	proc0.p_addr->u_pcb.pcb_flags = 0;
+	proc0.p_addr->u_pcb.pcb_ptd = IdlePTD;
+}
+
+
+
+
 ```

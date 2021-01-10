@@ -1493,8 +1493,14 @@ init386(first)
 	 */
 	pa_indx = 0;
 	badpages = 0;
+
+	/*
+	 * phys_avail is a mem map where each entry contains the end address of
+	 * a contiguous range of good pages. It has 10 entries, where means
+	 * there can only be 9 holes in memory.
+	 */
 	if (pagesinbase > 1) {
-		phys_avail[pa_indx++] = PAGE_SIZE;	/* skip first page of memory */
+		phys_avail[pa_indx++] = PAGE_SIZE;		/* skip first page of memory */
 		phys_avail[pa_indx] = ptoa(pagesinbase);/* memory up to the ISA hole */
 		physmem = pagesinbase - 1;
 	} else {
@@ -1502,6 +1508,13 @@ init386(first)
 		pa_indx++;
 	}
 
+	/*
+	 * Using the Sysmap ptes, we check the bits of every free page of
+	 * memory in the system and identify any bad pages.
+	 *
+	 * Recall that avail_start is the first page frame following the
+	 * DMA pages.
+	 */
 	for (target_page = avail_start; target_page < ptoa(Maxmem); target_page += PAGE_SIZE) {
 		int tmp, page_bad = FALSE;
 		/*
@@ -1582,9 +1595,14 @@ init386(first)
 
 	/*
 	 * XXX
-	 * The last chunk must contain at leat one page plus the message
+	 * The last chunk must contain at least one page plus the message
 	 * buffer to avoid complicating other code (message buffer address
 	 * calculation, etc.).
+	 *
+	 * Or in other words, this code ensures that the last entry in the
+	 * phys_avail map is large enough so that the end addr of the
+	 * penultimate entry + msgbuf struct + PAGE_SIZE does NOT overlap
+	 * with the end address of the final entry.
 	 */
 	while (phys_avail[pa_indx - 1] + PAGE_SIZE +
 	    round_page(sizeof(struct msgbuf)) >= phys_avail[pa_indx]) {
@@ -1598,6 +1616,7 @@ init386(first)
 	/* Trim off space for the message buffer. */
 	phys_avail[pa_indx] -= round_page(sizeof(struct msgbuf));
 
+	/* Free memory ends at the msgbuf */
 	avail_end = phys_avail[pa_indx];
 
 	/* now running on new page tables, configured,and u/iom is accessible */
@@ -1622,6 +1641,7 @@ init386(first)
 	((struct i386tss *)gdt_segs[GPROC0_SEL].ssd_base)->tss_ioopt =
 		(sizeof(struct i386tss))<<16;
 
+	/* ltr = Load the Task Register */
 	ltr(gsel_tss);
 
 	/* make a call gate to reenter kernel with */
