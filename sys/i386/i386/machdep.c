@@ -1495,9 +1495,13 @@ init386(first)
 	badpages = 0;
 
 	/*
-	 * phys_avail is a mem map where each entry contains the end address of
-	 * a contiguous range of good pages. It has 10 entries, where means
-	 * there can only be 9 holes in memory.
+	 * phys_avail is a mem map where each pair of entries represents a
+	 * range of good pages. It has 10 total entries, which means it can
+	 * only support 5 page ranges.
+	 *
+	 * Basic Design: For 0 <= n < 5
+	 *     phys_avail[2n] = starting address
+	 *   phys_avail[2n+1] = ending address
 	 */
 	if (pagesinbase > 1) {
 		phys_avail[pa_indx++] = PAGE_SIZE;		/* skip first page of memory */
