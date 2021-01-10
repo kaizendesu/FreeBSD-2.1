@@ -50,23 +50,23 @@ File: vm_init.c
 
 File: vm_page.c
     vm_set_page_size    ++--
-    vm_page_startup     ++--
+    vm_page_startup     ----
 
 File: vm_object.c
-    vm_object_init      ++--
+    vm_object_init      ----
 
 File: vm_map.c
-    vm_map_startup      ++--
+    vm_map_startup      ----
 
 File: vm_kern.c
-    kmem_init           ++--
+    kmem_init           ----
 
 File: pmap.c
     pmap_bootstrap      ++--
     pmap_init           ----
 
 File: vm_pager.c
-    vm_pager_init       ++--
+    vm_pager_init       ----
 ```
 
 ## Important Data Structures

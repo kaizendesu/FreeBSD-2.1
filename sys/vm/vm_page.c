@@ -183,6 +183,7 @@ vm_page_startup(starta, enda, vaddr)
 		phys_avail[i + 1] = trunc_page(phys_avail[i + 1]);
 	}
 
+	/* Obtain the idx of the largest range of free pgs */
 	for (i = 0; phys_avail[i + 1]; i += 2) {
 		int size = phys_avail[i + 1] - phys_avail[i];
 
@@ -196,24 +197,19 @@ vm_page_startup(starta, enda, vaddr)
 
 	start = phys_avail[biggestone];
 
-
 	/*
 	 * Initialize the locks
 	 */
-
 	simple_lock_init(&vm_page_queue_free_lock);
 	simple_lock_init(&vm_page_queue_lock);
-
 	/*
 	 * Initialize the queue headers for the free queue, the active queue
 	 * and the inactive queue.
 	 */
-
 	TAILQ_INIT(&vm_page_queue_free);
 	TAILQ_INIT(&vm_page_queue_active);
 	TAILQ_INIT(&vm_page_queue_inactive);
 	TAILQ_INIT(&vm_page_queue_cache);
-
 	/*
 	 * Allocate (and initialize) the hash table buckets.
 	 *
@@ -231,11 +227,9 @@ vm_page_startup(starta, enda, vaddr)
 			vm_page_bucket_count <<= 1;
 	}
 	vm_page_hash_mask = vm_page_bucket_count - 1;
-
 	/*
 	 * Validate these addresses.
 	 */
-
 	new_start = start + vm_page_bucket_count * sizeof(struct pglist);
 	new_start = round_page(new_start);
 	mapped = vaddr;
