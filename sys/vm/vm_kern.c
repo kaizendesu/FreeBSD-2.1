@@ -295,7 +295,6 @@ kmem_malloc(map, size, waitflag)
 
 	size = round_page(size);
 	addr = vm_map_min(map);
-
 	/*
 	 * Locate sufficient space in the map.  This will give us the final
 	 * virtual address for the new memory, and thus will tell us the
@@ -316,7 +315,6 @@ kmem_malloc(map, size, waitflag)
 	offset = addr - vm_map_min(kmem_map);
 	vm_object_reference(kmem_object);
 	vm_map_insert(map, kmem_object, offset, addr, addr + size);
-
 	/*
 	 * If we can wait, just mark the range as wired (will fault pages as
 	 * necessary).

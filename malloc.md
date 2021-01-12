@@ -33,7 +33,7 @@ File: kern_malloc.c
     free              ----
 
 File: vm_kern.c
-    kmem_alloc        ----
+    kmem_malloc        ++-+
     kmem_free         ----
 ```
 
@@ -57,6 +57,25 @@ struct kmembuckets {
 	long	kb_highwat;	/* high water mark */
 	long	kb_couldfree;	/* over high water mark and could free */
 };
+```
+
+### *kmemusage* Structure
+
+```c
+/* From /sys/sys/malloc.h */
+
+/*
+ * Array of descriptors that describe the contents of each page
+ */
+struct kmemusage {
+	short ku_indx;		/* bucket index */
+	union {
+		u_short freecnt;/* for small allocations, free pieces in page */
+		u_short pagecnt;/* for large allocations, pages alloced */
+	} ku_un;
+};
+#define ku_freecnt ku_un.freecnt
+#define ku_pagecnt ku_un.pagecnt
 ```
 
 ## Code Walkthrough
@@ -304,5 +323,133 @@ out:
 #endif
 	splx(s);
 	return ((void *) va);
+}
+
+/*
+ * Allocate wired-down memory in the kernel's address map for the higher
+ * level kernel memory allocator (kern/kern_malloc.c).  We cannot use
+ * kmem_alloc() because we may need to allocate memory at interrupt
+ * level where we cannot block (canwait == FALSE).
+ *
+ * This routine has its own private kernel submap (kmem_map) and object
+ * (kmem_object).  This, combined with the fact that only malloc uses
+ * this routine, ensures that we will never block in map or object waits.
+ *
+ * Note that this still only works in a uni-processor environment and
+ * when called at splhigh().
+ *
+ * We don't worry about expanding the map (adding entries) since entries
+ * for wired maps are statically allocated.
+ */
+vm_offset_t
+kmem_malloc(map, size, waitflag)
+	register vm_map_t map;
+	register vm_size_t size;
+	boolean_t waitflag;
+{
+	register vm_offset_t offset, i;
+	vm_map_entry_t entry;
+	vm_offset_t addr;
+	vm_page_t m;
+
+	if (map != kmem_map && map != mb_map)
+		panic("kmem_malloc: map != {kmem,mb}_map");
+
+	size = round_page(size);
+	addr = vm_map_min(map);
+	/*
+	 * Locate sufficient space in the map.  This will give us the final
+	 * virtual address for the new memory, and thus will tell us the
+	 * offset within the kernel map.
+	 */
+	vm_map_lock(map);
+	if (vm_map_findspace(map, 0, size, &addr)) {
+		vm_map_unlock(map);
+		if (map == mb_map) {
+			mb_map_full = TRUE;
+			log(LOG_ERR, "Out of mbuf clusters - increase maxusers!\n");
+			return (0);
+		}
+		if (waitflag == M_WAITOK)
+			panic("kmem_malloc: kmem_map too small");
+		return (0);
+	}
+	offset = addr - vm_map_min(kmem_map);
+	vm_object_reference(kmem_object);
+	vm_map_insert(map, kmem_object, offset, addr, addr + size);
+	/*
+	 * If we can wait, just mark the range as wired (will fault pages as
+	 * necessary).
+	 */
+	if (waitflag == M_WAITOK) {
+		vm_map_unlock(map);
+		(void) vm_map_pageable(map, (vm_offset_t) addr, addr + size,
+		    FALSE);
+		vm_map_simplify(map, addr);
+		return (addr);
+	}
+	/*
+	 * If we cannot wait then we must allocate all memory up front,
+	 * pulling it off the active queue to prevent pageout.
+	 */
+	vm_object_lock(kmem_object);
+	for (i = 0; i < size; i += PAGE_SIZE) {
+		m = vm_page_alloc(kmem_object, offset + i,
+			(waitflag == M_NOWAIT) ? VM_ALLOC_INTERRUPT : VM_ALLOC_SYSTEM);
+
+		/*
+		 * Ran out of space, free everything up and return. Don't need
+		 * to lock page queues here as we know that the pages we got
+		 * aren't on any queues.
+		 */
+		if (m == NULL) {
+			while (i != 0) {
+				i -= PAGE_SIZE;
+				m = vm_page_lookup(kmem_object, offset + i);
+				PAGE_WAKEUP(m);
+				vm_page_free(m);
+			}
+			vm_object_unlock(kmem_object);
+			vm_map_delete(map, addr, addr + size);
+			vm_map_unlock(map);
+			return (0);
+		}
+#if 0
+		vm_page_zero_fill(m);
+#endif
+		m->flags &= ~PG_BUSY;
+		m->valid = VM_PAGE_BITS_ALL;
+	}
+	vm_object_unlock(kmem_object);
+
+	/*
+	 * Mark map entry as non-pageable. Assert: vm_map_insert() will never
+	 * be able to extend the previous entry so there will be a new entry
+	 * exactly corresponding to this address range and it will have
+	 * wired_count == 0.
+	 */
+	if (!vm_map_lookup_entry(map, addr, &entry) ||
+	    entry->start != addr || entry->end != addr + size ||
+	    entry->wired_count)
+		panic("kmem_malloc: entry not found or misaligned");
+	entry->wired_count++;
+
+	/*
+	 * Loop thru pages, entering them in the pmap. (We cannot add them to
+	 * the wired count without wrapping the vm_page_queue_lock in
+	 * splimp...)
+	 */
+	for (i = 0; i < size; i += PAGE_SIZE) {
+		vm_object_lock(kmem_object);
+		m = vm_page_lookup(kmem_object, offset + i);
+		vm_object_unlock(kmem_object);
+		pmap_enter(vm_map_pmap(map), addr + i, VM_PAGE_TO_PHYS(m),
+		    VM_PROT_ALL, TRUE);
+		m->flags |= PG_MAPPED;
+	}
+	vm_map_unlock(map);
+
+	vm_map_simplify(map, addr);
+	return (addr);
 }
 ```
