@@ -46,7 +46,7 @@
 
 struct kmembuckets bucket[MINBUCKET + 16];
 struct kmemstats kmemstats[M_LAST];
-struct kmemusage *kmemusage;
+struct kmemusage *kmemusage;		/* This is kmemsizes[] */
 char *kmembase, *kmemlimit;
 char *memname[] = INITKMEMNAMES;
 

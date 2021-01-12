@@ -16,7 +16,6 @@ File: locore.s
             pmap_bootstrap
         main
             vm_mem_init
-            kmem_init
                 vm_set_page_size
                 vm_page_startup
                 vm_object_init
@@ -24,6 +23,7 @@ File: locore.s
                 kmem_init
                 pmap_init
                 vm_pager_init
+            kmeminit
             cpu_startup
 ```
 
@@ -59,7 +59,7 @@ File: vm_map.c
     vm_map_startup      ++--
 
 File: vm_kern.c
-    kmem_init           ++--
+    kmem_init           ----
 
 File: pmap.c
     pmap_bootstrap      ++--
@@ -67,6 +67,9 @@ File: pmap.c
 
 File: vm_pager.c
     vm_pager_init       ++--
+
+File: kern_malloc.c
+    kmeminit            ----
 ```
 
 ## Important Data Structures
