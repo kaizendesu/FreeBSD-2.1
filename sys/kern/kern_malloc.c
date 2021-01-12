@@ -111,6 +111,10 @@ malloc(size, type, flags)
 	if (((unsigned long)type) > M_LAST)
 		panic("malloc - bogus type");
 #endif
+	/*
+	 * Obtain the bucket index, where each bucket contains
+	 * data on allocations of size 2^(indx).
+	 */
 	indx = BUCKETINDX(size);
 	kbp = &bucket[indx];
 	s = splhigh();
@@ -129,13 +133,24 @@ malloc(size, type, flags)
 #ifdef DIAGNOSTIC
 	copysize = 1 << indx < MAX_COPY ? 1 << indx : MAX_COPY;
 #endif
+	/* If no free blocks in bucket, use kmem_malloc */
 	if (kbp->kb_next == NULL) {
 		kbp->kb_last = NULL;
+		/*  size > 8KiB? */
 		if (size > MAXALLOCSAVE)
-			allocsize = roundup(size, CLBYTES);
+			allocsize = roundup(size, CLBYTES); /* first fit alloc */
 		else
-			allocsize = 1 << indx;
+			allocsize = 1 << indx;	/* power-of-2 alloc */
+		/*
+		 * Convert bytes to clicks:
+		 * btoc(x) (((unsigned)(x)+(NBPG-1))>>PGSHIFT)
+		 *
+		 * Convert clicks to bytes:
+		 * ctob(x) ((x)<<PGSHIFT)
+		 */
 		npg = clrnd(btoc(allocsize));
+
+		/* Allocate the memory in the kmem_map submap */
 		va = (caddr_t) kmem_malloc(kmem_map, (vm_size_t)ctob(npg), flags);
 		if (va == NULL) {
 			splx(s);
@@ -144,9 +159,18 @@ malloc(size, type, flags)
 #ifdef KMEMSTATS
 		kbp->kb_total += kbp->kb_elmpercl;
 #endif
+		/*
+		 * Find the kmemusage structure corresponding to the va
+		 * and update it.
+		 *
+		 * btokup(addr)(&kmemusage[((caddr_t)(addr)-kmembase) >> CLSHIFT
+		 *                                                      (PGSHIFT)
+		 */ 
 		kup = btokup(va);
 		kup->ku_indx = indx;
+				/*    > 8192 */
 		if (allocsize > MAXALLOCSAVE) {
+			/* Max allocation is 255 MiB */
 			if (npg > 65535)
 				panic("malloc: allocation too large");
 			kup->ku_pagecnt = npg;
@@ -167,6 +191,10 @@ malloc(size, type, flags)
 		savedlist = kbp->kb_next;
 		kbp->kb_next = cp = va + (npg * NBPG) - allocsize;
 		for (;;) {
+		/* struct freelist {
+		 * 		caddr_t	next;
+		 * };
+		 */
 			freep = (struct freelist *)cp;
 #ifdef DIAGNOSTIC
 			/*
@@ -178,15 +206,32 @@ malloc(size, type, flags)
 				*lp = WEIRD_ADDR;
 			freep->type = M_FREE;
 #endif /* DIAGNOSTIC */
+			/*
+			 * For page aligned allocations we break
+			 * the first time we get to this if statement.
+			 *
+			 * For small power-of-2 allocations, we cont
+			 * to decrement freep->next to the first empty
+			 * block of size allocsize.
+			 */
 			if (cp <= va)
 				break;
 			cp -= allocsize;
+
+			/* Assign the caddr val cp at mem loc cp! */
 			freep->next = cp;
 		}
 		freep->next = savedlist;
 		if (kbp->kb_last == NULL)
 			kbp->kb_last = (caddr_t)freep;
 	}
+	/*
+	 * We use the last allocsize chunk in the page for
+	 * small allocations, NOT the first one!
+	 *
+	 * Ex. |-----I-----I-----I+++++| -- = free, ++ = reserved
+	 *     va              kb_next
+	 */
 	va = kbp->kb_next;
 	kbp->kb_next = ((struct freelist *)va)->next;
 #ifdef DIAGNOSTIC

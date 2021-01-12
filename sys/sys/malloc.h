@@ -241,37 +241,37 @@ struct kmembuckets {
 #ifdef KERNEL
 #define	MINALLOCSIZE	(1 << MINBUCKET)
 #define BUCKETINDX(size) \
-	(size) <= (MINALLOCSIZE * 128) \
-		? (size) <= (MINALLOCSIZE * 8) \
-			? (size) <= (MINALLOCSIZE * 2) \
-				? (size) <= (MINALLOCSIZE * 1) \
-					? (MINBUCKET + 0) \
-					: (MINBUCKET + 1) \
-				: (size) <= (MINALLOCSIZE * 4) \
-					? (MINBUCKET + 2) \
-					: (MINBUCKET + 3) \
-			: (size) <= (MINALLOCSIZE* 32) \
-				? (size) <= (MINALLOCSIZE * 16) \
-					? (MINBUCKET + 4) \
-					: (MINBUCKET + 5) \
-				: (size) <= (MINALLOCSIZE * 64) \
-					? (MINBUCKET + 6) \
-					: (MINBUCKET + 7) \
-		: (size) <= (MINALLOCSIZE * 2048) \
-			? (size) <= (MINALLOCSIZE * 512) \
-				? (size) <= (MINALLOCSIZE * 256) \
-					? (MINBUCKET + 8) \
-					: (MINBUCKET + 9) \
-				: (size) <= (MINALLOCSIZE * 1024) \
-					? (MINBUCKET + 10) \
-					: (MINBUCKET + 11) \
-			: (size) <= (MINALLOCSIZE * 8192) \
-				? (size) <= (MINALLOCSIZE * 4096) \
-					? (MINBUCKET + 12) \
-					: (MINBUCKET + 13) \
-				: (size) <= (MINALLOCSIZE * 16384) \
-					? (MINBUCKET + 14) \
-					: (MINBUCKET + 15)
+	(size) <= (MINALLOCSIZE * 128) /* <= 2048 */\
+		? (size) <= (MINALLOCSIZE * 8) /* <= 128 */\
+			? (size) <= (MINALLOCSIZE * 2) /* <= 32 */\
+				? (size) <= (MINALLOCSIZE * 1) /* <= 16 */\
+					? (MINBUCKET + 0) /* 16 */\
+					: (MINBUCKET + 1) /* 32 */\
+				: (size) <= (MINALLOCSIZE * 4) /* <= 64 */\
+					? (MINBUCKET + 2) /* 64 */\
+					: (MINBUCKET + 3) /* 128 */\
+			: (size) <= (MINALLOCSIZE * 32) /* <= 512 */\
+				? (size) <= (MINALLOCSIZE * 16) /* <= 256 */\
+					? (MINBUCKET + 4) /* 256 */\
+					: (MINBUCKET + 5) /* 512 */\
+				: (size) <= (MINALLOCSIZE * 64) /* <= 1024 */\
+					? (MINBUCKET + 6) /* 1024 */\
+					: (MINBUCKET + 7) /* 2048 */\
+		: (size) <= (MINALLOCSIZE * 2048) /* <= 32768 */\
+			? (size) <= (MINALLOCSIZE * 512) /* <= 8192 */\
+				? (size) <= (MINALLOCSIZE * 256) /* <= 4096 */\
+					? (MINBUCKET + 8) /* 4096 */\
+					: (MINBUCKET + 9) /* 8192 */\
+				: (size) <= (MINALLOCSIZE * 1024) /* <= 16384 */\
+					? (MINBUCKET + 10) /* 16384 */\
+					: (MINBUCKET + 11) /* 32768 */\
+			: (size) <= (MINALLOCSIZE * 8192) /* <= 131072 */ \
+				? (size) <= (MINALLOCSIZE * 4096) /* <= 65536 */\
+					? (MINBUCKET + 12) /* 65536 */\
+					: (MINBUCKET + 13) /* 131072 */\
+				: (size) <= (MINALLOCSIZE * 16384) /* <= 262144 */\
+					? (MINBUCKET + 14) /* 262144 */\
+					: (MINBUCKET + 15) /* 524288 */
 
 /*
  * Turn virtual addresses into kmem map indicies
