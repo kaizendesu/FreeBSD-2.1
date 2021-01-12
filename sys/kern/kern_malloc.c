@@ -210,9 +210,13 @@ malloc(size, type, flags)
 			 * For page aligned allocations we break
 			 * the first time we get to this if statement.
 			 *
-			 * For small power-of-2 allocations, we cont
-			 * to decrement freep->next to the first empty
-			 * block of size allocsize.
+			 * For small power-of-2 allocations, we decrement
+			 * and store the caddr of each free block inside
+			 * of the free blocks themselves. We break after
+			 * writing the value of va inside of the free
+			 * block located at va! This is consistent with
+			 * large allocations because the value stored at
+			 * va for them will be 0 (NULL).
 			 */
 			if (cp <= va)
 				break;
@@ -233,6 +237,8 @@ malloc(size, type, flags)
 	 *     va              kb_next
 	 */
 	va = kbp->kb_next;
+
+	/* Assign the next free block (see 2nd blk comment above) */
 	kbp->kb_next = ((struct freelist *)va)->next;
 #ifdef DIAGNOSTIC
 	freep = (struct freelist *)va;
