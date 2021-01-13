@@ -30,11 +30,11 @@ where each function per filename is listed in the order that it is called.
 ```txt
 File: kern_malloc.c
     malloc            ++-+
-    free              ----
+    free              ++-+
 
 File: vm_kern.c
-    kmem_malloc        ++-+
-    kmem_free         ----
+    kmem_malloc       ++-+
+    kmem_free         ++-+
 ```
 
 ## Important Data Structures
@@ -228,7 +228,8 @@ malloc(size, type, flags)
 		savedlist = kbp->kb_next;
 		kbp->kb_next = cp = va + (npg * NBPG) - allocsize;
 		for (;;) {
-		/* struct freelist {
+		/*
+		 * struct freelist {
 		 * 		caddr_t	next;
 		 * };
 		 */
@@ -457,5 +458,158 @@ kmem_malloc(map, size, waitflag)
 
 	vm_map_simplify(map, addr);
 	return (addr);
+}
+```
+
+### *free* Code
+
+```c
+/*
+ * Free a block of memory allocated by malloc.
+ */
+void
+free(addr, type)
+	void *addr;
+	int type;
+{
+	register struct kmembuckets *kbp;
+	register struct kmemusage *kup;
+	register struct freelist *freep;
+	long size;
+	int s;
+#ifdef DIAGNOSTIC
+	caddr_t cp;
+	long *end, *lp, alloc, copysize;
+#endif
+#ifdef KMEMSTATS
+	register struct kmemstats *ksp = &kmemstats[type];
+#endif
+
+#ifdef DIAGNOSTIC
+	if ((char *)addr < kmembase || (char *)addr >= kmemlimit) {
+		panic("free: address 0x%x out of range", addr);
+	}
+	if ((u_long)type > M_LAST) {
+		panic("free: type %d out of range", type);
+	}
+#endif
+	/*
+	 * Find the kmemusage structure corresponding to addr
+	 * and use it to obtain the allocation's kmembucket.
+	 *
+	 * btokup(addr)(&kmemusage[((caddr_t)(addr)-kmembase) >> CLSHIFT
+	 *                                                      (PGSHIFT)
+	 */ 
+	kup = btokup(addr);
+	size = 1 << kup->ku_indx;
+	kbp = &bucket[kup->ku_indx];
+	s = splhigh();
+#ifdef DIAGNOSTIC
+	/*
+	 * Check for returns of data that do not point to the
+	 * beginning of the allocation.
+	 */
+	if (size > NBPG * CLSIZE)
+		alloc = addrmask[BUCKETINDX(NBPG * CLSIZE)];
+	else
+		alloc = addrmask[kup->ku_indx];
+	if (((u_long)addr & alloc) != 0)
+		panic("free: unaligned addr 0x%x, size %d, type %s, mask %d",
+			addr, size, memname[type], alloc);
+#endif /* DIAGNOSTIC */
+		/*   > 8192 */
+	if (size > MAXALLOCSAVE) {
+		kmem_free(kmem_map, (vm_offset_t)addr, ctob(kup->ku_pagecnt));
+#ifdef KMEMSTATS
+		size = kup->ku_pagecnt << PGSHIFT;
+		ksp->ks_memuse -= size;
+		kup->ku_indx = 0;
+		kup->ku_pagecnt = 0;
+		if (ksp->ks_memuse + size >= ksp->ks_limit &&
+		    ksp->ks_memuse < ksp->ks_limit)
+			wakeup((caddr_t)ksp);
+		ksp->ks_inuse--;
+		kbp->kb_total -= 1;
+#endif
+		splx(s);
+		return;
+	}
+	/*
+	 * struct freelist {
+	 * 		caddr_t	next;
+	 * };
+	 */
+	freep = (struct freelist *)addr;
+#ifdef DIAGNOSTIC
+	/*
+	 * Check for multiple frees. Use a quick check to see if
+	 * it looks free before laboriously searching the freelist.
+	 */
+	if (freep->spare0 == WEIRD_ADDR) {
+		for (cp = kbp->kb_next; cp; cp = *(caddr_t *)cp) {
+			if (addr != cp)
+				continue;
+			printf("multiply freed item %p\n", addr);
+			panic("free: duplicated free");
+		}
+	}
+	/*
+	 * Copy in known text to detect modification after freeing
+	 * and to make it look free. Also, save the type being freed
+	 * so we can list likely culprit if modification is detected
+	 * when the object is reallocated.
+	 */
+	copysize = size < MAX_COPY ? size : MAX_COPY;
+	end = (long *)&((caddr_t)addr)[copysize];
+	for (lp = (long *)addr; lp < end; lp++)
+		*lp = WEIRD_ADDR;
+	freep->type = type;
+#endif /* DIAGNOSTIC */
+#ifdef KMEMSTATS
+	kup->ku_freecnt++;
+	if (kup->ku_freecnt >= kbp->kb_elmpercl)
+		if (kup->ku_freecnt > kbp->kb_elmpercl)
+			panic("free: multiple frees");
+		else if (kbp->kb_totalfree > kbp->kb_highwat)
+			kbp->kb_couldfree++;
+	kbp->kb_totalfree++;
+	ksp->ks_memuse -= size;
+	if (ksp->ks_memuse + size >= ksp->ks_limit &&
+	    ksp->ks_memuse < ksp->ks_limit)
+		wakeup((caddr_t)ksp);
+	ksp->ks_inuse--;
+#endif
+	/*
+	 * Set freed address to kb_next if no other free blocks,
+	 * otherwise assign the caddr of the freed block inside
+	 * the last free block.
+	 */ 
+	if (kbp->kb_next == NULL)
+		kbp->kb_next = addr;
+	else
+		((struct freelist *)kbp->kb_last)->next = addr;
+
+	/* Assign the value 0 in the freed block */
+	freep->next = NULL;
+
+	/* Assign the freed block as the last free block */
+	kbp->kb_last = addr;
+	splx(s);
+}
+
+/*
+ *	kmem_free:
+ *
+ *	Release a region of kernel virtual memory allocated
+ *	with kmem_alloc, and return the physical pages
+ *	associated with that region.
+ */
+void
+kmem_free(map, addr, size)
+	vm_map_t map;
+	register vm_offset_t addr;
+	vm_size_t size;
+{
+	(void) vm_map_remove(map, trunc_page(addr), round_page(addr + size));
 }
 ```

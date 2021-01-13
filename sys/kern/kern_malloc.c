@@ -191,7 +191,8 @@ malloc(size, type, flags)
 		savedlist = kbp->kb_next;
 		kbp->kb_next = cp = va + (npg * NBPG) - allocsize;
 		for (;;) {
-		/* struct freelist {
+		/*
+		 * struct freelist {
 		 * 		caddr_t	next;
 		 * };
 		 */
@@ -323,6 +324,13 @@ free(addr, type)
 		panic("free: type %d out of range", type);
 	}
 #endif
+	/*
+	 * Find the kmemusage structure corresponding to addr
+	 * and use it to obtain the allocation's kmembucket.
+	 *
+	 * btokup(addr)(&kmemusage[((caddr_t)(addr)-kmembase) >> CLSHIFT
+	 *                                                      (PGSHIFT)
+	 */ 
 	kup = btokup(addr);
 	size = 1 << kup->ku_indx;
 	kbp = &bucket[kup->ku_indx];
@@ -340,6 +348,7 @@ free(addr, type)
 		panic("free: unaligned addr 0x%x, size %d, type %s, mask %d",
 			addr, size, memname[type], alloc);
 #endif /* DIAGNOSTIC */
+		/*   > 8192 */
 	if (size > MAXALLOCSAVE) {
 		kmem_free(kmem_map, (vm_offset_t)addr, ctob(kup->ku_pagecnt));
 #ifdef KMEMSTATS
@@ -396,11 +405,20 @@ free(addr, type)
 		wakeup((caddr_t)ksp);
 	ksp->ks_inuse--;
 #endif
+	/*
+	 * Set freed address to kb_next if no other free blocks,
+	 * otherwise assign the caddr of the freed block inside
+	 * the last free block.
+	 */ 
 	if (kbp->kb_next == NULL)
 		kbp->kb_next = addr;
 	else
 		((struct freelist *)kbp->kb_last)->next = addr;
+
+	/* Assign the value 0 in the freed block */
 	freep->next = NULL;
+
+	/* Assign the freed block as the last free block */
 	kbp->kb_last = addr;
 	splx(s);
 }
