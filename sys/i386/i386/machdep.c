@@ -218,11 +218,10 @@ cpu_startup()
 
 	/* avail_end was pre-decremented in init_386() to compensate */
 	for (i = 0; i < btoc(sizeof (struct msgbuf)); i++)
-		pmap_enter(pmap_kernel(), (vm_offset_t)msgbufp,
-			   avail_end + i * NBPG,
-			   VM_PROT_ALL, TRUE);
+		pmap_enter(pmap_kernel(), (vm_offset_t)msgbufp,	/* kernel_pmap, va, ... */
+			   avail_end + i * NBPG,					/* pa, ... */
+			   VM_PROT_ALL, TRUE);						/* prot, wired */
 	msgbufmapped = 1;
-
 	/*
 	 * Good {morning,afternoon,evening,night}.
 	 */
@@ -235,11 +234,17 @@ cpu_startup()
 	 */
 	if (badpages != 0) {
 		int indx = 1;
-
 		/*
 		 * XXX skip reporting ISA hole & unmanaged kernel memory
 		 */
 		if (phys_avail[0] == PAGE_SIZE)
+			/*
+			 * We increment by two because we ended ranges
+			 * on memory holes. Hence:
+			 *
+			 * phys_avail[2n]   = base addr of pg range and/or end of memory hole
+			 * phys_avail[2n+1] = end of pg range and/or beg of mem hole
+			 */
 			indx += 2;
 
 		printf("Physical memory hole(s):\n");
@@ -285,20 +290,57 @@ again:
 	    (name) = (type *)v; v = (caddr_t)((name)+(num))
 #define	valloclim(name, type, num, lim) \
 	    (name) = (type *)v; v = (caddr_t)((lim) = ((name)+(num)))
+
+	/*
+	 * callout = (struct callout *)v; 
+	 * v = (caddr_t)(callout+ncallout);
+	 */
 	valloc(callout, struct callout, ncallout);
 #ifdef SYSVSHM
+	/*
+	 * shmsegs = (struct shmid_ds *)v; 
+	 * v = (caddr_t)(shmsegs+shminfo.shmmni);
+	 */
 	valloc(shmsegs, struct shmid_ds, shminfo.shmmni);
 #endif
 #ifdef SYSVSEM
+	/*
+	 * sema = (struct semid_ds *)v; 
+	 * v = (caddr_t)(sema+seminfo.semmni);
+	 */
 	valloc(sema, struct semid_ds, seminfo.semmni);
+	/*
+	 * sem = (struct sem *)v; 
+	 * v = (caddr_t)(sem+seminfo.semmns);
+	 */
 	valloc(sem, struct sem, seminfo.semmns);
 	/* This is pretty disgusting! */
+	/*
+	 * semu = (struct int *)v; 
+	 * v = (caddr_t)(semu+(seminfo.semmnu * seminfo.semusz) / sizeof(int));
+	 */
 	valloc(semu, int, (seminfo.semmnu * seminfo.semusz) / sizeof(int));
 #endif
 #ifdef SYSVMSG
+	/*
+	 * msgpool = (struct char *)v; 
+	 * v = (caddr_t)(msgpool+msginfo.msgmax);
+	 */
 	valloc(msgpool, char, msginfo.msgmax);
+	/*
+	 * msgmaps = (struct msgmap *)v; 
+	 * v = (caddr_t)(msgmaps+msginfo.msgseg);
+	 */
 	valloc(msgmaps, struct msgmap, msginfo.msgseg);
+	/*
+	 * msghdrs = (struct msg *)v; 
+	 * v = (caddr_t)(msghdrs+msginfo.msgtql);
+	 */
 	valloc(msghdrs, struct msg, msginfo.msgtql);
+	/*
+	 * msqids = (struct msqid_ds *)v; 
+	 * v = (caddr_t)(msqids+msginfo.msgmni);
+	 */
 	valloc(msqids, struct msqid_ds, msginfo.msgmni);
 #endif
 
@@ -309,7 +351,15 @@ again:
 	}
 	nswbuf = min(nbuf, 128);
 
+	/*
+	 * swbuf = (struct buf *)v; 
+	 * v = (caddr_t)(swbuf+nswbuf);
+	 */
 	valloc(swbuf, struct buf, nswbuf);
+	/*
+	 * buf = (struct buf *)v; 
+	 * v = (caddr_t)(buf+nbuf);
+	 */
 	valloc(buf, struct buf, nbuf);
 
 #ifdef BOUNCE_BUFFERS
@@ -331,6 +381,7 @@ again:
 	 */
 	if (firstaddr == 0) {
 		size = (vm_size_t)(v - firstaddr);
+		/* Allocate space for all the vallocs above with kernel map */ 
 		firstaddr = (int)kmem_alloc(kernel_map, round_page(size));
 		if (firstaddr == 0)
 			panic("startup: no room for tables");
@@ -349,6 +400,7 @@ again:
 				maxbkva + pager_map_size, TRUE);
 	io_map = kmem_suballoc(clean_map, &minaddr, &maxaddr, maxbkva, FALSE);
 #else
+	/* sva = starting virtual addr, eva = ending virtual addr */
 	clean_map = kmem_suballoc(kernel_map, &clean_sva, &clean_eva,
 			(nbuf*MAXBSIZE) + (nswbuf*MAXPHYS) + pager_map_size, TRUE);
 #endif
@@ -360,7 +412,6 @@ again:
 				(16*ARG_MAX), TRUE);
 	u_map = kmem_suballoc(kernel_map, &minaddr, &maxaddr,
 				(maxproc*UPAGES*PAGE_SIZE), FALSE);
-
 	/*
 	 * Finally, allocate mbuf pool.  Since mclrefcnt is an off-size
 	 * we use the more space efficient malloc in place of kmem_alloc.
@@ -405,7 +456,7 @@ again:
 	vm_pager_bufferinit();
 
 	/*
-	 * Configure the system.
+	 * Configure the system. (autoconfiguration)
 	 */
 	configure();
 

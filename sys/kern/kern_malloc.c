@@ -441,10 +441,25 @@ kmeminit()
 #if	(MAXALLOCSAVE < CLBYTES)
 		ERROR!_kmeminit:_MAXALLOCSAVE_too_small
 #endif
+	/*
+	 * int nmbclusters = 512 + MAXUSERS * 16
+	 * #define MCLBYTES (1 << 11)
+	 * #define VM_KMEM_SIZE (32 * 1024 * 1024)
+	 *
+	 * NOTE1: MAXUSERS is a constant that is set when we
+	 *        compile the kernel. (-DMAXUSERS=xx)
+	 *
+	 * NOTE2: nmbclusters = nb of mbuf clusters, where each
+	 *       mbuf cluster is 2048 bytes long. Read the text
+	 *       on the networking code for more info.
+	 *//*   pgs for networking    +  kmem submap */
 	npg = (nmbclusters * MCLBYTES + VM_KMEM_SIZE) / PAGE_SIZE;
 
+	/* Alloc the kmemusage array with npg entries in kernel_map */
 	kmemusage = (struct kmemusage *) kmem_alloc(kernel_map,
 		(vm_size_t)(npg * sizeof(struct kmemusage)));
+
+	/* Create the kmem_map submap for use by kmem_alloc */
 	kmem_map = kmem_suballoc(kernel_map, (vm_offset_t *)&kmembase,
 		(vm_offset_t *)&kmemlimit, (vm_size_t)(npg * PAGE_SIZE),
 		FALSE);

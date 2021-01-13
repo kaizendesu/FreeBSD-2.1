@@ -1,4 +1,4 @@
-# Walkthrough of FreeBSD 2.1's Kernel Initialization Code
+# Walkthrough of FreeBSD 2.1's Kernel's VM Initialization Code
 
 ## Contents
 
@@ -25,6 +25,8 @@ File: locore.s
                 vm_pager_init
             kmeminit
             cpu_startup
+            vm_init_limits
+            vm_pager_bufferinit
 ```
 
 ## Reading Checklist
@@ -43,7 +45,7 @@ File: locore.s
 
 File: machdep.c
     init386             ++-+
-    cpu_startup         ----
+    cpu_startup         ++-+
 
 File: vm_init.c
     vm_mem_init         ++-+
@@ -59,7 +61,7 @@ File: vm_map.c
     vm_map_startup      ++--
 
 File: vm_kern.c
-    kmem_init           ----
+    kmem_init           ++-+
 
 File: pmap.c
     pmap_bootstrap      ++--
@@ -67,9 +69,13 @@ File: pmap.c
 
 File: vm_pager.c
     vm_pager_init       ++--
+    vm_pager_bufferinit ++--
 
 File: kern_malloc.c
-    kmeminit            ----
+    kmeminit            ++-+
+
+File: vm_glue.c
+    vm_init_limits      ++-+
 ```
 
 ## Important Data Structures
@@ -1247,5 +1253,409 @@ vm_mem_init()
 	 *     dev_pager_init: initializes dev_pager_list & dev_pager_fakelist
  	 */
 	vm_pager_init();
+}
+
+/*
+ * Initialize the kernel memory allocator
+ */
+void
+kmeminit()
+{
+	register long indx;
+	int npg;
+
+#if	((MAXALLOCSAVE & (MAXALLOCSAVE - 1)) != 0)
+		ERROR!_kmeminit:_MAXALLOCSAVE_not_power_of_2
+#endif
+#if	(MAXALLOCSAVE > MINALLOCSIZE * 32768)
+		ERROR!_kmeminit:_MAXALLOCSAVE_too_big
+#endif
+#if	(MAXALLOCSAVE < CLBYTES)
+		ERROR!_kmeminit:_MAXALLOCSAVE_too_small
+#endif
+	/*
+	 * int nmbclusters = 512 + MAXUSERS * 16
+	 * #define MCLBYTES (1 << 11)
+	 * #define VM_KMEM_SIZE (32 * 1024 * 1024)
+	 *
+	 * NOTE1: MAXUSERS is a constant that is set when we
+	 *        compile the kernel. (-DMAXUSERS=xx)
+	 *
+	 * NOTE2: nmbclusters = nb of mbuf clusters, where each
+	 *       mbuf cluster is 2048 bytes long. Read the text
+	 *       on the networking code for more info.
+	 *//*   pgs for networking    +  kmem submap */
+	npg = (nmbclusters * MCLBYTES + VM_KMEM_SIZE) / PAGE_SIZE;
+
+	/* Alloc the kmemusage array with npg entries in kernel_map */
+	kmemusage = (struct kmemusage *) kmem_alloc(kernel_map,
+		(vm_size_t)(npg * sizeof(struct kmemusage)));
+
+	/* Create the kmem_map submap for use by kmem_alloc */
+	kmem_map = kmem_suballoc(kernel_map, (vm_offset_t *)&kmembase,
+		(vm_offset_t *)&kmemlimit, (vm_size_t)(npg * PAGE_SIZE),
+		FALSE);
+#ifdef KMEMSTATS
+	for (indx = 0; indx < MINBUCKET + 16; indx++) {
+		if (1 << indx >= CLBYTES)
+			bucket[indx].kb_elmpercl = 1;
+		else
+			bucket[indx].kb_elmpercl = CLBYTES / (1 << indx);
+		bucket[indx].kb_highwat = 5 * bucket[indx].kb_elmpercl;
+	}
+	/*
+	 * Limit maximum memory for each type to 60% of malloc area size or
+	 * 60% of physical memory, whichever is smaller.
+	 */
+	for (indx = 0; indx < M_LAST; indx++) {
+		kmemstats[indx].ks_limit = min(cnt.v_page_count * PAGE_SIZE,
+			(npg * PAGE_SIZE - nmbclusters * MCLBYTES)) * 6 / 10;
+	}
+#endif
+}
+
+void
+cpu_startup()
+{
+	register unsigned i;
+	register caddr_t v;
+	vm_offset_t maxaddr;
+	vm_size_t size = 0;
+	int firstaddr, indx;
+	vm_offset_t minaddr;
+
+	if (boothowto & RB_VERBOSE)
+		bootverbose++;
+
+	/*
+	 * Initialize error message buffer (at end of core).
+	 */
+
+	/* avail_end was pre-decremented in init_386() to compensate */
+	for (i = 0; i < btoc(sizeof (struct msgbuf)); i++)
+		pmap_enter(pmap_kernel(), (vm_offset_t)msgbufp,	/* kernel_pmap, va, ... */
+			   avail_end + i * NBPG,					/* pa, ... */
+			   VM_PROT_ALL, TRUE);						/* prot, wired */
+	msgbufmapped = 1;
+	/*
+	 * Good {morning,afternoon,evening,night}.
+	 */
+	printf(version);
+	startrtclock();
+	identifycpu();
+	printf("real memory  = %d (%dK bytes)\n", ptoa(Maxmem), ptoa(Maxmem) / 1024);
+	/*
+	 * Display any holes after the first chunk of extended memory.
+	 */
+	if (badpages != 0) {
+		int indx = 1;
+		/*
+		 * XXX skip reporting ISA hole & unmanaged kernel memory
+		 */
+		if (phys_avail[0] == PAGE_SIZE)
+			/*
+			 * We increment by two because we ended ranges
+			 * on memory holes. Hence:
+			 *
+			 * phys_avail[2n]   = base addr of pg range and/or end of memory hole
+			 * phys_avail[2n+1] = end of pg range and/or beg of mem hole
+			 */
+			indx += 2;
+
+		printf("Physical memory hole(s):\n");
+		for (; phys_avail[indx + 1] != 0; indx += 2) {
+			int size = phys_avail[indx + 1] - phys_avail[indx];
+
+			printf("0x%08x - 0x%08x, %d bytes (%d pages)\n", phys_avail[indx],
+			    phys_avail[indx + 1] - 1, size, size / PAGE_SIZE);
+		}
+	}
+
+	/*
+	 * Quickly wire in netisrs.
+	 */
+	setup_netisrs(&netisr_set);
+
+/*
+#ifdef ISDN
+	DONET(isdnintr, NETISR_ISDN);
+#endif
+*/
+
+	/*
+	 * Allocate space for system data structures.
+	 * The first available kernel virtual address is in "v".
+	 * As pages of kernel virtual memory are allocated, "v" is incremented.
+	 * As pages of memory are allocated and cleared,
+	 * "firstaddr" is incremented.
+	 * An index into the kernel page table corresponding to the
+	 * virtual memory address maintained in "v" is kept in "mapaddr".
+	 */
+
+	/*
+	 * Make two passes.  The first pass calculates how much memory is
+	 * needed and allocates it.  The second pass assigns virtual
+	 * addresses to the various data structures.
+	 */
+	firstaddr = 0;
+again:
+	v = (caddr_t)firstaddr;
+
+#define	valloc(name, type, num) \
+	    (name) = (type *)v; v = (caddr_t)((name)+(num))
+#define	valloclim(name, type, num, lim) \
+	    (name) = (type *)v; v = (caddr_t)((lim) = ((name)+(num)))
+
+	/*
+	 * callout = (struct callout *)v; 
+	 * v = (caddr_t)(callout+ncallout);
+	 */
+	valloc(callout, struct callout, ncallout);
+#ifdef SYSVSHM
+	/*
+	 * shmsegs = (struct shmid_ds *)v; 
+	 * v = (caddr_t)(shmsegs+shminfo.shmmni);
+	 */
+	valloc(shmsegs, struct shmid_ds, shminfo.shmmni);
+#endif
+#ifdef SYSVSEM
+	/*
+	 * sema = (struct semid_ds *)v; 
+	 * v = (caddr_t)(sema+seminfo.semmni);
+	 */
+	valloc(sema, struct semid_ds, seminfo.semmni);
+	/*
+	 * sem = (struct sem *)v; 
+	 * v = (caddr_t)(sem+seminfo.semmns);
+	 */
+	valloc(sem, struct sem, seminfo.semmns);
+	/* This is pretty disgusting! */
+	/*
+	 * semu = (struct int *)v; 
+	 * v = (caddr_t)(semu+(seminfo.semmnu * seminfo.semusz) / sizeof(int));
+	 */
+	valloc(semu, int, (seminfo.semmnu * seminfo.semusz) / sizeof(int));
+#endif
+#ifdef SYSVMSG
+	/*
+	 * msgpool = (struct char *)v; 
+	 * v = (caddr_t)(msgpool+msginfo.msgmax);
+	 */
+	valloc(msgpool, char, msginfo.msgmax);
+	/*
+	 * msgmaps = (struct msgmap *)v; 
+	 * v = (caddr_t)(msgmaps+msginfo.msgseg);
+	 */
+	valloc(msgmaps, struct msgmap, msginfo.msgseg);
+	/*
+	 * msghdrs = (struct msg *)v; 
+	 * v = (caddr_t)(msghdrs+msginfo.msgtql);
+	 */
+	valloc(msghdrs, struct msg, msginfo.msgtql);
+	/*
+	 * msqids = (struct msqid_ds *)v; 
+	 * v = (caddr_t)(msqids+msginfo.msgmni);
+	 */
+	valloc(msqids, struct msqid_ds, msginfo.msgmni);
+#endif
+
+	if (nbuf == 0) {
+		nbuf = 30;
+		if( physmem > 1024)
+			nbuf += min((physmem - 1024) / 12, 1024);
+	}
+	nswbuf = min(nbuf, 128);
+
+	/*
+	 * swbuf = (struct buf *)v; 
+	 * v = (caddr_t)(swbuf+nswbuf);
+	 */
+	valloc(swbuf, struct buf, nswbuf);
+	/*
+	 * buf = (struct buf *)v; 
+	 * v = (caddr_t)(buf+nbuf);
+	 */
+	valloc(buf, struct buf, nbuf);
+
+#ifdef BOUNCE_BUFFERS
+	/*
+	 * If there is more than 16MB of memory, allocate some bounce buffers
+	 */
+	if (Maxmem > 4096) {
+		if (bouncepages == 0) {
+			bouncepages = 64;
+			bouncepages += ((Maxmem - 4096) / 2048) * 32;
+		}
+		v = (caddr_t)((vm_offset_t)((vm_offset_t)v + PAGE_SIZE - 1) & ~(PAGE_SIZE - 1));
+		valloc(bouncememory, char, bouncepages * PAGE_SIZE);
+	}
+#endif
+
+	/*
+	 * End of first pass, size has been calculated so allocate memory
+	 */
+	if (firstaddr == 0) {
+		size = (vm_size_t)(v - firstaddr);
+		/* Allocate space for all the vallocs above with kernel map */ 
+		firstaddr = (int)kmem_alloc(kernel_map, round_page(size));
+		if (firstaddr == 0)
+			panic("startup: no room for tables");
+		goto again;
+	}
+
+	/*
+	 * End of second pass, addresses have been assigned
+	 */
+	if ((vm_size_t)(v - firstaddr) != size)
+		panic("startup: table size inconsistency");
+
+#ifdef BOUNCE_BUFFERS
+	clean_map = kmem_suballoc(kernel_map, &clean_sva, &clean_eva,
+			(nbuf*MAXBSIZE) + (nswbuf*MAXPHYS) +
+				maxbkva + pager_map_size, TRUE);
+	io_map = kmem_suballoc(clean_map, &minaddr, &maxaddr, maxbkva, FALSE);
+#else
+	/* sva = starting virtual addr, eva = ending virtual addr */
+	clean_map = kmem_suballoc(kernel_map, &clean_sva, &clean_eva,
+			(nbuf*MAXBSIZE) + (nswbuf*MAXPHYS) + pager_map_size, TRUE);
+#endif
+	buffer_map = kmem_suballoc(clean_map, &buffer_sva, &buffer_eva,
+				(nbuf*MAXBSIZE), TRUE);
+	pager_map = kmem_suballoc(clean_map, &pager_sva, &pager_eva,
+				(nswbuf*MAXPHYS) + pager_map_size, TRUE);
+	exec_map = kmem_suballoc(kernel_map, &minaddr, &maxaddr,
+				(16*ARG_MAX), TRUE);
+	u_map = kmem_suballoc(kernel_map, &minaddr, &maxaddr,
+				(maxproc*UPAGES*PAGE_SIZE), FALSE);
+	/*
+	 * Finally, allocate mbuf pool.  Since mclrefcnt is an off-size
+	 * we use the more space efficient malloc in place of kmem_alloc.
+	 */
+	mclrefcnt = (char *)malloc(nmbclusters+CLBYTES/MCLBYTES,
+				   M_MBUF, M_NOWAIT);
+	bzero(mclrefcnt, nmbclusters+CLBYTES/MCLBYTES);
+	mb_map = kmem_suballoc(kmem_map, (vm_offset_t *)&mbutl, &maxaddr,
+			       nmbclusters * MCLBYTES, FALSE);
+	/*
+	 * Initialize callouts
+	 */
+	callfree = callout;
+	for (i = 1; i < ncallout; i++)
+		callout[i-1].c_next = &callout[i];
+
+#if defined(USERCONFIG_BOOT) && defined(USERCONFIG)
+	boothowto |= RB_CONFIG;
+#endif
+        if (boothowto & RB_CONFIG) {
+#ifdef USERCONFIG
+		userconfig();
+		cninit();	/* the preferred console may have changed */
+#else
+		printf("Sorry! no userconfig in this kernel\n");
+#endif
+	}
+
+#ifdef BOUNCE_BUFFERS
+	/*
+	 * init bounce buffers
+	 */
+	vm_bounce_init();
+#endif
+	printf("avail memory = %d (%dK bytes)\n", ptoa(cnt.v_free_count),
+	    ptoa(cnt.v_free_count) / 1024);
+
+	/*
+	 * Set up buffers, so they can be used to read disk labels.
+	 */
+	bufinit();
+	vm_pager_bufferinit();
+
+	/*
+	 * Configure the system. (autoconfiguration)
+	 */
+	configure();
+
+	/*
+	 * In verbose mode, print out the BIOS's idea of the disk geometries.
+	 */
+	if (bootverbose) {
+		printf("BIOS Geometries:\n");
+		for (i = 0; i < N_BIOS_GEOM; i++) {
+			unsigned long bios_geom;
+			int max_cylinder, max_head, max_sector;
+
+			bios_geom = bootinfo.bi_bios_geom[i];
+
+			/*
+			 * XXX the bootstrap punts a 1200K floppy geometry
+			 * when the get-disk-geometry interrupt fails.  Skip
+			 * drives that have this geometry.
+			 */
+			if (bios_geom == 0x4f010f)
+				continue;
+
+			printf(" %x:%08x ", i, bios_geom);
+			max_cylinder = bios_geom >> 16;
+			max_head = (bios_geom >> 8) & 0xff;
+			max_sector = bios_geom & 0xff;
+			printf(
+		"0..%d=%d cylinders, 0..%d=%d heads, 1..%d=%d sectors\n",
+			       max_cylinder, max_cylinder + 1,
+			       max_head, max_head + 1,
+			       max_sector, max_sector);
+		}
+		printf(" %d accounted for\n", bootinfo.bi_n_bios_used);
+	}
+}
+
+/*
+ * Set default limits for VM system.
+ * Called for proc 0, and then inherited by all others.
+ */
+void
+vm_init_limits(p)
+	register struct proc *p;
+{
+	int rss_limit;
+
+	/*
+	 * Set up the initial limits on process VM. Set the maximum resident
+	 * set size to be half of (reasonably) available memory.  Since this
+	 * is a soft limit, it comes into effect only when the system is out
+	 * of memory - half of main memory helps to favor smaller processes,
+	 * and reduces thrashing of the object cache.
+	 */
+	p->p_rlimit[RLIMIT_STACK].rlim_cur = DFLSSIZ;
+	p->p_rlimit[RLIMIT_STACK].rlim_max = MAXSSIZ;
+	p->p_rlimit[RLIMIT_DATA].rlim_cur = DFLDSIZ;
+	p->p_rlimit[RLIMIT_DATA].rlim_max = MAXDSIZ;
+	/* limit the limit to no less than 2MB */
+	rss_limit = max(cnt.v_free_count / 2, 512);
+	p->p_rlimit[RLIMIT_RSS].rlim_cur = ptoa(rss_limit);
+	p->p_rlimit[RLIMIT_RSS].rlim_max = RLIM_INFINITY;
+}
+
+void
+vm_pager_bufferinit()
+{
+	struct buf *bp;
+	int i;
+
+	bp = swbuf;
+	/*
+	 * Now set up swap and physical I/O buffer headers.
+	 */
+	for (i = 0; i < nswbuf - 1; i++, bp++) {
+		TAILQ_INSERT_HEAD(&bswlist, bp, b_freelist);
+		bp->b_rcred = bp->b_wcred = NOCRED;
+		bp->b_vnbufs.le_next = NOLIST;
+	}
+	bp->b_rcred = bp->b_wcred = NOCRED;
+	bp->b_vnbufs.le_next = NOLIST;
+	bp->b_actf = NULL;
+
+	swapbkva = kmem_alloc_pageable(pager_map, nswbuf * MAXPHYS);
+	if (!swapbkva)
+		panic("Not enough pager_map VM space for physical buffers");
 }
 ```
